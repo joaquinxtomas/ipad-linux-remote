@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+data_home=${XDG_DATA_HOME:-${HOME:?}/.local/share}
+profile_dir=$data_home/remote-desktop/firefox-profile
+mkdir -p "$profile_dir"
+chmod 700 "$profile_dir"
+
+exec /usr/bin/firefox --no-remote --profile "$profile_dir" "$@"

@@ -1,0 +1,16 @@
+{
+  "name": "iPad Linux Remote",
+  "short_name": "Linux Remote",
+  "start_url": "/?scale=1.25",
+  "display": "fullscreen",
+  "background_color": "#111111",
+  "theme_color": "#111111",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

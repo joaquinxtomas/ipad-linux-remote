@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+    <meta name="theme-color" content="#111111">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Linux Remote">
+    <link rel="manifest" href="./manifest.webmanifest">
+    <link rel="icon" href="./icon.svg" type="image/svg+xml">
+    <title>iPad Linux Remote</title>
+    <style>
+        :root {
+            --viewport-left: 0px;
+            --viewport-top: 0px;
+            --viewport-width: 100vw;
+            --viewport-height: 100vh;
+        }
+        * { box-sizing: border-box; }
+        html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #111; color: white; font: 14px system-ui, sans-serif; }
+        button, input, select { font: inherit; }
+        #screen {
+            position: fixed;
+            left: calc(var(--viewport-left) + env(safe-area-inset-left, 0px));
+            top: calc(var(--viewport-top) + env(safe-area-inset-top, 0px));
+            width: calc(var(--viewport-width) - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px));
+            height: calc(var(--viewport-height) - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+        }
+        #status, #controls {
+            position: fixed;
+            z-index: 2;
+            top: calc(var(--viewport-top) + max(8px, env(safe-area-inset-top, 0px)));
+            padding: 7px 10px;
+            border: 0;
+            border-radius: 7px;
+            color: white;
+            background: #000c;
+        }
+        #status { left: 50%; transform: translateX(-50%); pointer-events: none; white-space: nowrap; }
+        #controls { right: max(8px, env(safe-area-inset-right, 0px)); display: flex; gap: 7px; align-items: center; }
+        #controls select, #controls button { min-height: 30px; color: white; border: 1px solid #777; border-radius: 5px; background: #222; }
+        #auth, #clipboard-panel {
+            position: fixed;
+            z-index: 3;
+            left: 50%;
+            top: 50%;
+            width: min(320px, calc(100vw - 32px));
+            transform: translate(-50%, -50%);
+            padding: 20px;
+            border-radius: 10px;
+            background: #222;
+            box-shadow: 0 8px 30px #000a;
+        }
+        #auth label, #auth input, #auth button { display: block; width: 100%; }
+        #auth input { margin: 8px 0 12px; padding: 10px; border: 1px solid #777; border-radius: 6px; background: #111; color: white; }
+        #auth button { padding: 10px; border: 0; border-radius: 6px; background: #4b8bf5; color: white; }
+        #auth-error { min-height: 1.4em; color: #ff9b9b; }
+        #clipboard-panel textarea { width: 100%; min-height: 150px; margin: 8px 0; resize: vertical; color: white; background: #111; }
+        #clipboard-panel div { display: flex; gap: 8px; }
+        #clipboard-panel button { flex: 1; padding: 8px; }
+        [hidden] { display: none !important; }
+    </style>
+</head>
+<body>
+    <div id="status" role="status">Connecting…</div>
+    <div id="controls">
+        <label for="scale">Scale</label>
+        <select id="scale" aria-label="Rendering scale">
+            <option value="1">Fast · 1×</option>
+            <option value="1.25">Balanced · 1.25×</option>
+            <option value="1.5">Sharp · 1.5×</option>
+        </select>
+        <button id="clipboard" type="button">Clipboard</button>
+        <button id="reconnect" type="button">Reconnect</button>
+    </div>
+    <form id="auth" hidden>
+        <label for="password">VNC password</label>
+        <input id="password" type="password" autocomplete="current-password" required>
+        <div id="auth-error" role="alert"></div>
+        <button type="submit">Connect</button>
+    </form>
+    <section id="clipboard-panel" hidden aria-label="Clipboard transfer">
+        <label for="clipboard-text">iPad ↔ Linux clipboard</label>
+        <textarea id="clipboard-text" spellcheck="false"></textarea>
+        <div>
+            <button id="clipboard-send" type="button">Send to Linux</button>
+            <button id="clipboard-close" type="button">Close</button>
+        </div>
+    </section>
+    <div id="screen"></div>
+    <script type="module">
+        import RFB from './core/rfb.js';
+
+        const root = document.documentElement;
+        const screen = document.getElementById('screen');
+        const status = document.getElementById('status');
+        const scaleSelect = document.getElementById('scale');
+        const clipboardButton = document.getElementById('clipboard');
+        const clipboardPanel = document.getElementById('clipboard-panel');
+        const clipboardText = document.getElementById('clipboard-text');
+        const clipboardSend = document.getElementById('clipboard-send');
+        const clipboardClose = document.getElementById('clipboard-close');
+        const reconnectButton = document.getElementById('reconnect');
+        const auth = document.getElementById('auth');
+        const passwordInput = document.getElementById('password');
+        const authError = document.getElementById('auth-error');
+        const query = new URLSearchParams(location.search);
+        const hash = new URLSearchParams(location.hash.slice(1));
+        const parameter = (name, fallback) => hash.get(name) ?? query.get(name) ?? fallback;
+        const scales = [1, 1.25, 1.5];
+        const requestedScale = Number(parameter('scale', '1.25'));
+        const requestedQuality = Number(parameter('quality', '9'));
+        const quality = Number.isInteger(requestedQuality) && requestedQuality >= 0 && requestedQuality <= 9
+            ? requestedQuality : 9;
+        const maxPixels = 4000000;
+        const maxAxis = 2560;
+        let renderScale = scales.includes(requestedScale) ? requestedScale : 1.25;
+        let rfb;
+        let password = parameter('password', undefined);
+        let authenticationFailed = false;
+        let credentialRequest = false;
+        let reconnectAllowed = true;
+        let reconnectWhenVisible = false;
+        let resizeTimer;
+        let reconnectTimer;
+
+        scaleSelect.value = String(renderScale);
+
+        function setStatus(message, hide = false) {
+            status.textContent = message;
+            status.hidden = hide;
+        }
+
+        function showAuthentication(message = '') {
+            authError.textContent = message;
+            passwordInput.value = '';
+            auth.hidden = false;
+            passwordInput.focus();
+        }
+
+        function requestRemoteResize() {
+            if (!rfb?._supportsSetDesktopSize) return;
+            const rect = screen.getBoundingClientRect();
+            const factor = Math.min(
+                renderScale,
+                maxAxis / rect.width,
+                maxAxis / rect.height,
+                Math.sqrt(maxPixels / (rect.width * rect.height)),
+            );
+            const width = Math.max(32, Math.floor(rect.width * factor));
+            const height = Math.max(32, Math.floor(rect.height * factor));
+
+            // ponytail: noVNC 1.3 lacks a public custom-size API; switch to it
+            // when upstream exposes one instead of using these stable internals.
+            RFB.messages.setDesktopSize(
+                rfb._sock, width, height, rfb._screenID, rfb._screenFlags,
+            );
+        }
+
+        function scheduleResize() {
+            clearTimeout(resizeTimer);
+            resizeTimer = setTimeout(requestRemoteResize, 500);
+        }
+
+        function syncViewport() {
+            const viewport = window.visualViewport;
+            root.style.setProperty('--viewport-left', `${viewport?.offsetLeft ?? 0}px`);
+            root.style.setProperty('--viewport-top', `${viewport?.offsetTop ?? 0}px`);
+            root.style.setProperty('--viewport-width', `${viewport?.width ?? innerWidth}px`);
+            root.style.setProperty('--viewport-height', `${viewport?.height ?? innerHeight}px`);
+            scheduleResize();
+        }
+
+        function connect() {
+            clearTimeout(reconnectTimer);
+            authenticationFailed = false;
+            credentialRequest = false;
+            reconnectAllowed = true;
+            reconnectWhenVisible = false;
+            const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
+            rfb = new RFB(screen, `${scheme}://${location.host}/websockify`, {
+                credentials: password ? { password } : undefined,
+            });
+            rfb.scaleViewport = true;
+            rfb.qualityLevel = quality;
+            rfb.compressionLevel = 0;
+
+            rfb.addEventListener('credentialsrequired', () => {
+                credentialRequest = true;
+                showAuthentication();
+            });
+            rfb.addEventListener('securityfailure', () => authenticationFailed = true);
+            rfb.addEventListener('clipboard', (event) => {
+                clipboardText.value = event.detail.text;
+            });
+            rfb.addEventListener('connect', () => {
+                auth.hidden = true;
+                setStatus(`Connected · ${renderScale}×`, true);
+                scheduleResize();
+            });
+            rfb.addEventListener('disconnect', () => {
+                if (!reconnectAllowed) return;
+                if (authenticationFailed) {
+                    credentialRequest = false;
+                    reconnectAllowed = false;
+                    showAuthentication('Incorrect password');
+                    return;
+                }
+                if (document.hidden) {
+                    reconnectWhenVisible = true;
+                    setStatus('Paused · return to reconnect');
+                    return;
+                }
+                setStatus('Reconnecting…');
+                reconnectTimer = setTimeout(connect, 1000);
+            });
+        }
+
+        auth.addEventListener('submit', (event) => {
+            event.preventDefault();
+            password = passwordInput.value;
+            auth.hidden = true;
+            if (credentialRequest) {
+                credentialRequest = false;
+                rfb.sendCredentials({ password });
+            } else {
+                connect();
+            }
+        });
+        scaleSelect.addEventListener('change', () => {
+            renderScale = Number(scaleSelect.value);
+            const url = new URL(location.href);
+            url.searchParams.set('scale', renderScale);
+            history.replaceState(null, '', url);
+            setStatus(`Resizing · ${renderScale}×`);
+            scheduleResize();
+        });
+        clipboardButton.addEventListener('click', () => {
+            clipboardPanel.hidden = false;
+            clipboardText.focus();
+        });
+        clipboardSend.addEventListener('click', () => {
+            rfb?.clipboardPasteFrom(clipboardText.value);
+            clipboardPanel.hidden = true;
+            rfb?.focus();
+        });
+        clipboardClose.addEventListener('click', () => {
+            clipboardPanel.hidden = true;
+            rfb?.focus();
+        });
+        reconnectButton.addEventListener('click', () => {
+            reconnectAllowed = false;
+            clearTimeout(reconnectTimer);
+            rfb?.disconnect();
+            location.reload();
+        });
+        addEventListener('resize', syncViewport);
+        addEventListener('orientationchange', syncViewport);
+        window.visualViewport?.addEventListener('resize', syncViewport);
+        window.visualViewport?.addEventListener('scroll', syncViewport);
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden && reconnectWhenVisible) connect();
+            if (!document.hidden) syncViewport();
+        });
+
+        syncViewport();
+        connect();
+    </script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+*.log
+*.passwd
+.env
+*.key
+*.pem
+*.p12
+AGENTS.md

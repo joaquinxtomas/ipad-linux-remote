@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+display=${REMOTE_DESKTOP_DISPLAY:-:98}
+vnc_port=${REMOTE_DESKTOP_VNC_PORT:-5998}
+web_port=${REMOTE_DESKTOP_WEB_PORT:-6080}
+web_bind=${REMOTE_DESKTOP_WEB_BIND:-127.0.0.1}
+render_scale=${REMOTE_DESKTOP_RENDER_SCALE:-1.25}
+config_home=${XDG_CONFIG_HOME:-${HOME:?}/.config}
+password_file=${REMOTE_DESKTOP_VNC_PASSWORD_FILE:-$config_home/remote-desktop/vnc.passwd}
+project_dir=$(readlink -f "$(dirname "${BASH_SOURCE[0]}")/..")
+[[ $display =~ ^:[1-9][0-9]*$ ]] || {
+    echo "REMOTE_DESKTOP_DISPLAY must be an X display other than :0" >&2
+    exit 2
+}
+for port in "$vnc_port" "$web_port"; do
+    [[ $port =~ ^[0-9]+$ ]] && ((port >= 1024 && port <= 65535)) || {
+        echo "Ports must be between 1024 and 65535" >&2
+        exit 2
+    }
+done
+[[ $vnc_port != "$web_port" ]] || {
+    echo "VNC and web ports must differ" >&2
+    exit 2
+}
+[[ $render_scale == 1 || $render_scale == 1.25 || $render_scale == 1.5 ]] || {
+    echo "REMOTE_DESKTOP_RENDER_SCALE must be 1, 1.25 or 1.5" >&2
+    exit 2
+}
+[[ $web_bind =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+    echo "REMOTE_DESKTOP_WEB_BIND must be an IPv4 address" >&2
+    exit 2
+}
+if [[ $web_bind != 127.0.0.1 ]]; then
+    command -v tailscale >/dev/null || {
+        echo "Remote binding requires Tailscale" >&2
+        exit 1
+    }
+    tailscale_ip=$(tailscale ip -4 2>/dev/null || true)
+    [[ -n $tailscale_ip && $web_bind == "$tailscale_ip" ]] || {
+        echo "Remote binding must equal this host's active Tailscale IPv4" >&2
+        exit 1
+    }
+fi
+
+for command in Xvnc xdpyinfo dbus-run-session cinnamon websockify xauth mcookie stat ln flock; do
+    command -v "$command" >/dev/null || {
+        echo "Missing dependency: $command" >&2
+        exit 1
+    }
+done
+
+[[ -f $password_file && -r $password_file ]] || {
+    echo "Create the VNC password first: vncpasswd $password_file" >&2
+    exit 1
+}
+password_mode=$(stat -c %a "$password_file")
+(((8#$password_mode & 8#077) == 0)) || {
+    echo "VNC password file must not be accessible by group or others" >&2
+    exit 1
+}
+
+runtime_dir=${XDG_RUNTIME_DIR:-/tmp}/remote-desktop
+auth_file=$runtime_dir/Xauthority.${display#:}
+web_root=$runtime_dir/web
+mkdir -p "$runtime_dir"
+chmod 700 "$runtime_dir"
+exec 9>"$runtime_dir/launcher.lock"
+flock -n 9 || {
+    echo "Remote desktop is already running" >&2
+    exit 1
+}
+
+xvnc_pid=
+desktop_pid=
+web_pid=
+
+cleanup() {
+    [[ -n $web_pid ]] && kill "$web_pid" 2>/dev/null || true
+    [[ -n $desktop_pid ]] && kill "$desktop_pid" 2>/dev/null || true
+    [[ -n $xvnc_pid ]] && kill "$xvnc_pid" 2>/dev/null || true
+    [[ -n $web_pid ]] && wait "$web_pid" 2>/dev/null || true
+    [[ -n $desktop_pid ]] && wait "$desktop_pid" 2>/dev/null || true
+    [[ -n $xvnc_pid ]] && wait "$xvnc_pid" 2>/dev/null || true
+    rm -f -- "$auth_file"
+}
+trap cleanup EXIT INT TERM HUP
+
+mkdir -p "$web_root"
+for asset in index.html manifest.webmanifest icon.svg; do
+    ln -sfn "$project_dir/web/$asset" "$web_root/$asset"
+done
+ln -sfn /usr/share/novnc/core "$web_root/core"
+ln -sfn /usr/share/novnc/vendor "$web_root/vendor"
+touch "$auth_file"
+chmod 600 "$auth_file"
+xauth -f "$auth_file" add "$display" . "$(mcookie)"
+
+Xvnc "$display" -geometry 1366x1024 -depth 24 -localhost \
+    -SecurityTypes VncAuth -PasswordFile "$password_file" \
+    -AcceptSetDesktopSize=1 -rfbport "$vnc_port" -auth "$auth_file" &
+xvnc_pid=$!
+
+for _ in {1..50}; do
+    kill -0 "$xvnc_pid" 2>/dev/null || wait "$xvnc_pid"
+    XAUTHORITY=$auth_file xdpyinfo -display "$display" >/dev/null 2>&1 && break
+    sleep 0.1
+done
+XAUTHORITY=$auth_file xdpyinfo -display "$display" >/dev/null 2>&1 || {
+    echo "Xvnc did not become ready on $display" >&2
+    exit 1
+}
+
+# ponytail: direct Cinnamon is enough for the MVP; use a PAM/logind session if
+# session-managed desktop services become necessary.
+DISPLAY=$display XAUTHORITY=$auth_file PATH="$project_dir/bin:$PATH" \
+    CINNAMON_2D=1 CINNAMON_SLOWDOWN_FACTOR=0.0001 MUFFIN_NO_SHADOWS=1 \
+    CLUTTER_DEFAULT_FPS=60 dbus-run-session -- \
+    cinnamon --sm-disable --display="$display" &
+desktop_pid=$!
+
+websockify --web "$web_root" "$web_bind:$web_port" \
+    "127.0.0.1:$vnc_port" &
+web_pid=$!
+
+echo "Open http://$web_bind:$web_port/?scale=$render_scale"
+wait -n "$xvnc_pid" "$desktop_pid" "$web_pid"
