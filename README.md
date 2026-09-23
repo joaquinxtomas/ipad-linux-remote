@@ -54,8 +54,11 @@ REMOTE_DESKTOP_RENDER_SCALE=1.5 ./bin/start-desktop
 
 Quality defaults to 9 and compression to 0 for the direct Tailscale/LAN path.
 Use `?scale=1`, `?scale=1.25`, or `?scale=1.5` in the URL to change resolution
-for one connection. The virtual Cinnamon session uses its 2D mode without
-shadows or visible animation delays while retaining a 60 FPS ceiling.
+for one connection. For a compression comparison, try `#compression=0`,
+`#compression=1`, and `#compression=2` without changing the scale. Valid
+compression levels are 0–9; higher levels trade host CPU time for less traffic.
+The virtual Cinnamon session uses its 2D mode without shadows or visible
+animation delays while retaining a 60 FPS ceiling.
 
 Firefox launched from the virtual Cinnamon menu automatically uses an isolated
 profile under `~/.local/share/remote-desktop/firefox-profile`, allowing it to

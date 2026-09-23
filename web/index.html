@@ -113,6 +113,10 @@
         const requestedQuality = Number(parameter('quality', '9'));
         const quality = Number.isInteger(requestedQuality) && requestedQuality >= 0 && requestedQuality <= 9
             ? requestedQuality : 9;
+        const requestedCompression = Number(parameter('compression', '0'));
+        const compression = Number.isInteger(requestedCompression)
+            && requestedCompression >= 0 && requestedCompression <= 9
+            ? requestedCompression : 0;
         const maxPixels = 4000000;
         const maxAxis = 2560;
         let renderScale = scales.includes(requestedScale) ? requestedScale : 1.25;
@@ -184,7 +188,7 @@
             });
             rfb.scaleViewport = true;
             rfb.qualityLevel = quality;
-            rfb.compressionLevel = 0;
+            rfb.compressionLevel = compression;
 
             rfb.addEventListener('credentialsrequired', () => {
                 credentialRequest = true;
