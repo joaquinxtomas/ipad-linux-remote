@@ -1,9 +1,33 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Find the real Firefox, skipping this wrapper's own directory in PATH.
+self_dir=$(readlink -f "$(dirname "${BASH_SOURCE[0]}")")
+firefox=
+IFS=: read -ra path_dirs <<<"$PATH"
+for dir in "${path_dirs[@]}"; do
+    [[ -n $dir && $(readlink -f "$dir") != "$self_dir" && -x $dir/firefox ]] && {
+        firefox=$dir/firefox
+        break
+    }
+done
+
 data_home=${XDG_DATA_HOME:-${HOME:?}/.local/share}
 profile_dir=$data_home/remote-desktop/firefox-profile
+command=("$firefox")
+if [[ -z $firefox ]] && command -v flatpak >/dev/null &&
+    flatpak info org.mozilla.firefox >/dev/null 2>&1; then
+    command=(flatpak run org.mozilla.firefox)
+    profile_dir=$HOME/.var/app/org.mozilla.firefox/remote-desktop-profile
+elif [[ -z $firefox ]]; then
+    echo "Firefox is not installed" >&2
+    exit 1
+elif [[ $(readlink -f "$firefox") == /snap/* ]] ||
+    grep -qs /snap/bin/firefox "$firefox"; then
+    # Snap confinement blocks hidden directories such as ~/.local.
+    profile_dir=$HOME/snap/firefox/common/remote-desktop-profile
+fi
+
 mkdir -p "$profile_dir"
 chmod 700 "$profile_dir"
-
-exec /usr/bin/firefox --no-remote --profile "$profile_dir" "$@"
+exec "${command[@]}" --no-remote --profile "$profile_dir" "$@"

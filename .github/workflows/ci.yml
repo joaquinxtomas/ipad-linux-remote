@@ -1,0 +1,40 @@
+name: ci
+
+on: [push, pull_request]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: shellcheck -x bin/ipad-desktop bin/start-desktop bin/firefox lib/common.sh test/*.sh
+      - run: python3 -m py_compile lib/tailscale_identity.py
+
+  # Checks that dependency installation and session detection work per distro.
+  distros:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: debian:stable
+            prepare: apt-get update && apt-get install -y sudo xfce4-session
+          - image: ubuntu:24.04
+            prepare: apt-get update && apt-get install -y sudo xfce4-session
+          - image: fedora:latest
+            prepare: dnf install -y sudo xfce4-session
+          - image: archlinux:latest
+            prepare: pacman -Sy --noconfirm sudo xfce4-session
+          - image: opensuse/tumbleweed
+            prepare: zypper --non-interactive install sudo xfce4-session
+    container: ${{ matrix.image }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: ${{ matrix.prepare }}
+      - name: Install dependencies
+        shell: bash
+        run: |
+          . lib/common.sh
+          manager=$(package_manager)
+          install_packages "$manager" $(for c in Xvnc vncpasswd xdpyinfo xauth               websockify dbus-run-session mcookie flock python3 curl tar               sha256sum qrencode; do package_for "$manager" "$c"; done | sort -u)
+      - run: test/ci.sh

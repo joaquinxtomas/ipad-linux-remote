@@ -206,8 +206,10 @@ Do not add multimedia-oriented features unless required later.
 
 ## Phase 5 — Private remote access
 
-**Status:** prepared early as a security dependency for physical iPad testing;
-installation and cross-network validation remain pending.
+**Status:** automated. `ipad-desktop up` installs Tailscale, guides login with
+a QR code and publishes noVNC through `tailscale serve` (HTTPS, tailnet only,
+restricted by `Tailscale-User-Login`). Cross-network validation on the iPad
+remains pending.
 
 Install/configure Tailscale on:
 
@@ -242,7 +244,8 @@ The iPad can reach the desktop remotely while the server remains inaccessible fr
 
 **Status:** active; a single-instance `systemd --user` service, automatic
 restart, boot activation through user lingering, control-group shutdown and
-journal logging are implemented.
+journal logging are implemented. `ipad-desktop up` installs and starts the
+service; `status`, `down`, `password` and `uninstall` manage it.
 
 Add:
 
@@ -255,6 +258,37 @@ Add:
 - sensible resolution limits.
 
 Avoid requiring manual terminal commands for normal usage.
+
+## Phase 6.5 — Distribution
+
+**Status:** active. Goal: anyone can clone the repository and run one command.
+
+- Support X11 desktops on Debian/Ubuntu, Fedora, Arch and openSUSE families
+  (session auto-detection, per-distro package mapping, `doctor`).
+- Pin and checksum-verify noVNC instead of relying on distro paths.
+- Replace the LAN/Caddy idea with `tailscale serve`; Caddy was dropped.
+- CI: shellcheck plus a headless identity-gate test in each distro family.
+- Wayland-only desktops (GNOME) are out of scope until a headless Wayland
+  backend with client-driven resize is validated.
+
+### Pending verification (written 2026-10-05, not yet run on Linux)
+
+The distribution work was written on a machine without Linux, so only
+`bash -n` syntax checks ran. Before declaring Phase 6.5 complete:
+
+1. On Linux Mint: `ipad-desktop doctor`, then `ipad-desktop up`; confirm the
+   Tailscale login QR, HTTPS enablement prompt, Serve route and final URL.
+2. Run `test/smoke.sh` to confirm resizing still works with the downloaded
+   noVNC 1.7.0 (previously validated with the distro noVNC).
+3. Open the URL on the iPad from another network; confirm the identity gate
+   admits the owner and that the VNC password prompt still appears.
+4. Check CI: package names for Fedora and openSUSE were mapped from memory
+   (`tigervnc-server`, `python3-websockify`, `xorg-x11-Xvnc`, `dbus-1`) and
+   may need correction.
+5. Confirm every distro's websockify supports `--web-auth`; if not, fall
+   back to applying the identity plugin to the WebSocket only.
+6. Known trade-off: with the identity gate on, `http://127.0.0.1:6080` returns
+   403 locally. Comment out the config line for local use.
 
 ## Phase 7 — Final validation
 
@@ -289,6 +323,12 @@ Verify:
 - reconnect;
 - orientation changes;
 - no public ports.
+
+## Phase 8 — Embedded Tailscale (future)
+
+Only after `tailscale serve` proves itself on the iPad: evaluate a single Go
+binary that joins the tailnet itself through `tsnet`, removing the system
+Tailscale install, sudo and the operator setting.
 
 ## Out of Scope
 

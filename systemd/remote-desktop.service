@@ -1,11 +1,11 @@
 [Unit]
 Description=Private iPad Linux remote desktop
-After=network-online.target tailscaled.service
+After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/start-tailscale-desktop
+ExecStart=%h/.local/bin/ipad-desktop run
 Restart=always
 RestartSec=3
 TimeoutStopSec=10

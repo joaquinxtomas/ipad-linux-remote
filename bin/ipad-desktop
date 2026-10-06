@@ -1,0 +1,253 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+project_dir=$(readlink -f "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/..")
+# shellcheck source=lib/common.sh
+source "$project_dir/lib/common.sh"
+
+config_home=${XDG_CONFIG_HOME:-$HOME/.config}
+config_dir=$config_home/remote-desktop
+config_file=$config_dir/config
+password_file=${REMOTE_DESKTOP_VNC_PASSWORD_FILE:-$config_dir/vnc.passwd}
+web_port=${REMOTE_DESKTOP_WEB_PORT:-6080}
+render_scale=${REMOTE_DESKTOP_RENDER_SCALE:-1.25}
+unit=remote-desktop.service
+unit_file=$config_home/systemd/user/$unit
+assume_yes=false
+
+REQUIRED=(Xvnc vncpasswd xdpyinfo xauth websockify dbus-run-session mcookie
+    flock python3 curl tar sha256sum qrencode)
+
+usage() {
+    cat <<EOF
+Usage: ipad-desktop [--yes] <command>
+
+  up          Set everything up and start the desktop (default)
+  status      Show the service state and the iPad URL
+  down        Stop the desktop service
+  doctor      Check dependencies without changing anything
+  password    Generate a new VNC password
+  uninstall   Remove the service and the Tailscale Serve route
+  run         Run the desktop in the foreground (used by the service)
+EOF
+}
+
+say() { printf '\033[1m==>\033[0m %s\n' "$*"; }
+die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+
+confirm() {
+    $assume_yes && return 0
+    local answer
+    read -rp "$1 [Y/n] " answer
+    [[ -z $answer || $answer =~ ^[Yy] ]]
+}
+
+missing_commands() {
+    local command
+    for command in "${REQUIRED[@]}"; do
+        command -v "$command" >/dev/null || echo "$command"
+    done
+}
+
+ensure_dependencies() {
+    local missing manager packages=() command
+    mapfile -t missing < <(missing_commands)
+    if ((${#missing[@]})); then
+        manager=$(package_manager) ||
+            die "unsupported distribution; install: ${missing[*]}"
+        for command in "${missing[@]}"; do
+            packages+=("$(package_for "$manager" "$command")")
+        done
+        mapfile -t packages < <(printf '%s\n' "${packages[@]}" | sort -u)
+        say "Missing: ${missing[*]}"
+        confirm "Install ${packages[*]} with $manager (needs sudo)?" ||
+            die "dependencies are required"
+        install_packages "$manager" "${packages[@]}"
+    fi
+    detect_session >/dev/null || die "no supported X11 desktop found.
+Install one (XFCE is a light choice) or set REMOTE_DESKTOP_SESSION.
+Supported: ${SESSIONS[*]}"
+}
+
+ensure_novnc() {
+    [[ -f $novnc_home/core/rfb.js ]] && return
+    say "Downloading noVNC $NOVNC_VERSION"
+    local archive
+    archive=$(mktemp)
+    curl -fsSL "$NOVNC_URL" -o "$archive"
+    echo "$NOVNC_SHA256  $archive" | sha256sum -c --quiet - ||
+        { rm -f "$archive"; die "noVNC checksum mismatch"; }
+    mkdir -p "$(dirname "$novnc_home")"
+    tar -xzf "$archive" -C "$(dirname "$novnc_home")"
+    rm -f "$archive"
+}
+
+new_password() {
+    local password
+    password=$(python3 -c 'import secrets, string
+a = string.ascii_letters + string.digits
+print("".join(secrets.choice(a) for _ in range(8)))')
+    mkdir -p "$(dirname "$password_file")"
+    chmod 700 "$(dirname "$password_file")"
+    (umask 077 && printf '%s\n' "$password" | vncpasswd -f >"$password_file")
+    say "VNC password (shown only once): $password"
+}
+
+tailscale_json() {
+    tailscale status --json 2>/dev/null | python3 -c "import json, sys
+s = json.load(sys.stdin)
+$1"
+}
+
+ensure_tailscale() {
+    if ! command -v tailscale >/dev/null; then
+        confirm "Tailscale is not installed. Install it with the official script (needs sudo)?" ||
+            die "Tailscale is required for remote access"
+        curl -fsSL https://tailscale.com/install.sh | sh
+    fi
+    systemctl is-active --quiet tailscaled ||
+        sudo systemctl enable --now tailscaled
+    local state
+    state=$(tailscale_json 'print(s.get("BackendState", ""))' || true)
+    if [[ $state != Running ]]; then
+        say "Log in to Tailscale (scan the code with your phone or open the link)"
+        sudo tailscale up --operator="$USER" --qr
+    fi
+}
+
+tailscale_login() {
+    tailscale_json 'print(s["User"][str(s["Self"]["UserID"])]["LoginName"])'
+}
+
+tailscale_url() {
+    local host
+    host=$(tailscale_json 'print(s["Self"]["DNSName"].rstrip("."))')
+    echo "https://$host/?scale=$render_scale"
+}
+
+ensure_serve() {
+    say "Publishing the desktop inside your tailnet (tailscale serve)"
+    local target=http://127.0.0.1:$web_port
+    tailscale serve --bg --https=443 "$target" 2>/dev/null || {
+        # Serve needs root unless this user is the Tailscale operator.
+        sudo tailscale set --operator="$USER"
+        tailscale serve --bg --https=443 "$target"
+    }
+}
+
+write_config() {
+    local login
+    login=$(tailscale_login) || die "could not read the Tailscale login name"
+    mkdir -p "$config_dir"
+    (umask 077 && printf 'REMOTE_DESKTOP_ALLOWED_USERS=%s\n' "$login" >"$config_file")
+    say "Only $login may open the desktop"
+}
+
+install_service() {
+    mkdir -p "$HOME/.local/bin" "$(dirname "$unit_file")"
+    ln -sfn "$project_dir/bin/ipad-desktop" "$HOME/.local/bin/ipad-desktop"
+    install -m644 "$project_dir/systemd/$unit" "$unit_file"
+    systemctl --user daemon-reload
+    systemctl --user enable "$unit" >/dev/null
+    systemctl --user restart "$unit"
+    loginctl enable-linger "$USER" 2>/dev/null ||
+        echo "note: could not enable lingering; the desktop starts at login" >&2
+}
+
+wait_ready() {
+    local _ code
+    for _ in {1..100}; do
+        # 403 is expected: local requests carry no Tailscale identity.
+        code=$(curl -so /dev/null -w '%{http_code}'             "http://127.0.0.1:$web_port/" 2>/dev/null || true)
+        [[ $code == 200 || $code == 403 ]] && return
+        sleep 0.2
+    done
+    die "the desktop did not start; see: journalctl --user -u $unit"
+}
+
+show_url() {
+    local url
+    url=$(tailscale_url)
+    qrencode -t ANSIUTF8 "$url" 2>/dev/null || true
+    say "Open on your iPad (Tailscale app connected): $url"
+    echo "    Then use Safari's Share > Add to Home Screen for a fullscreen app."
+}
+
+cmd_up() {
+    ensure_dependencies
+    ensure_novnc
+    [[ -f $password_file ]] || new_password
+    ensure_tailscale
+    write_config
+    ensure_serve
+    install_service
+    wait_ready
+    show_url
+}
+
+cmd_run() {
+    # shellcheck disable=SC1090
+    [[ -f $config_file ]] && { set -a; . "$config_file"; set +a; }
+    exec "$project_dir/bin/start-desktop"
+}
+
+cmd_status() {
+    systemctl --user --no-pager status "$unit" || true
+    command -v tailscale >/dev/null && show_url
+}
+
+cmd_doctor() {
+    local missing manager session novnc ok=true
+    mapfile -t missing < <(missing_commands)
+    manager=$(package_manager || echo unknown)
+    echo "package manager: $manager"
+    if ((${#missing[@]})); then
+        ok=false
+        echo "missing commands: ${missing[*]}"
+        [[ $manager != unknown ]] && for command in "${missing[@]}"; do
+            package_for "$manager" "$command"
+        done | sort -u | xargs echo "  install with $manager:"
+    fi
+    session=$(detect_session) && echo "desktop: $session" ||
+        { ok=false; echo "desktop: none of ${SESSIONS[*]}"; }
+    novnc=$(find_novnc) && echo "noVNC: $novnc" ||
+        { ok=false; echo "noVNC: not downloaded yet"; }
+    if command -v tailscale >/dev/null; then
+        echo "tailscale: $(tailscale_json 'print(s.get("BackendState"))' || echo stopped)"
+    else
+        ok=false
+        echo "tailscale: not installed"
+    fi
+    [[ -f $password_file ]] && echo "password: set" ||
+        { ok=false; echo "password: not set"; }
+    $ok
+}
+
+cmd_down() {
+    systemctl --user stop "$unit"
+}
+
+cmd_uninstall() {
+    systemctl --user disable --now "$unit" 2>/dev/null || true
+    rm -f "$unit_file" "$HOME/.local/bin/ipad-desktop"
+    systemctl --user daemon-reload
+    command -v tailscale >/dev/null && tailscale serve --https=443 off || true
+    loginctl disable-linger "$USER" 2>/dev/null || true
+    say "Removed. Configuration remains in $config_dir"
+}
+
+[[ ${1:-} == --yes || ${1:-} == -y ]] && { assume_yes=true; shift; }
+case ${1:-up} in
+    up) cmd_up ;;
+    run) cmd_run ;;
+    status) cmd_status ;;
+    down) cmd_down ;;
+    doctor) cmd_doctor ;;
+    password)
+        ensure_dependencies
+        new_password
+        systemctl --user try-restart "$unit" 2>/dev/null || true ;;
+    uninstall) cmd_uninstall ;;
+    -h | --help | help) usage ;;
+    *) usage >&2; exit 2 ;;
+esac
