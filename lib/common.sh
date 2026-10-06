@@ -2,7 +2,9 @@
 # Shared helpers for the launcher and the ipad-desktop command.
 
 NOVNC_VERSION=1.7.0
+# shellcheck disable=SC2034  # used by bin/ipad-desktop
 NOVNC_SHA256=b1003a11b6e6e8d8f7f5e5586daae7f8ca651d8aee0aa155ff9ac841c48f52c6
+# shellcheck disable=SC2034
 NOVNC_URL=https://github.com/novnc/noVNC/archive/refs/tags/v$NOVNC_VERSION.tar.gz
 
 data_home=${XDG_DATA_HOME:-${HOME:?}/.local/share}
@@ -92,8 +94,9 @@ package_for() {
         zypper:xdpyinfo) echo xdpyinfo ;;
         zypper:xrandr) echo xrandr ;;
         zypper:websockify) echo python3-websockify ;;
-        zypper:dbus-run-session) echo dbus-1 ;;
+        zypper:dbus-run-session) echo dbus-1-daemon ;;
         *:mcookie | *:flock) echo util-linux ;;
+        *:sha256sum) echo coreutils ;;
         *:python3) [[ $manager == pacman ]] && echo python || echo python3 ;;
         *) echo "$command" ;;
     esac

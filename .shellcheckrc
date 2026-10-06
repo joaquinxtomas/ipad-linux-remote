@@ -1,0 +1,2 @@
+# A && B || true is the intended idiom for best-effort cleanup and checks.
+disable=SC2015

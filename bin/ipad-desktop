@@ -55,6 +55,8 @@ ensure_dependencies() {
     if ((${#missing[@]})); then
         manager=$(package_manager) ||
             die "unsupported distribution; install: ${missing[*]}"
+        [[ $manager == pacman && " ${missing[*]} " == *" websockify "* ]] &&
+            die "websockify is only in the AUR on Arch; install it first (e.g. yay -S websockify)"
         for command in "${missing[@]}"; do
             packages+=("$(package_for "$manager" "$command")")
         done

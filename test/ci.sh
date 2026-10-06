@@ -9,12 +9,14 @@ launcher_pid=
 cleanup() {
     [[ -n $launcher_pid ]] && kill "$launcher_pid" 2>/dev/null || true
     [[ -n $launcher_pid ]] && wait "$launcher_pid" 2>/dev/null || true
+    # A full desktop may leave gvfs mounted in the runtime dir.
+    fusermount -uz "$work/run/gvfs" 2>/dev/null || true
     rm -rf -- "$work"
 }
 trap cleanup EXIT
 
 export XDG_DATA_HOME=$work/data XDG_RUNTIME_DIR=$work/run
-mkdir -m700 -p "$XDG_RUNTIME_DIR"
+mkdir -m700 "$XDG_RUNTIME_DIR"
 # shellcheck source=lib/common.sh
 source "$project_dir/lib/common.sh"
 session=$(detect_session)

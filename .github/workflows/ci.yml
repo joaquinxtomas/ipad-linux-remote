@@ -24,7 +24,9 @@ jobs:
           - image: fedora:latest
             prepare: dnf install -y sudo xfce4-session
           - image: archlinux:latest
-            prepare: pacman -Sy --noconfirm sudo xfce4-session
+            prepare: >-
+              pacman -Sy --noconfirm sudo xfce4-session python-pip &&
+              pip install --break-system-packages websockify  # AUR-only on Arch
           - image: opensuse/tumbleweed
             prepare: zypper --non-interactive install sudo xfce4-session
     container: ${{ matrix.image }}
@@ -36,5 +38,9 @@ jobs:
         run: |
           . lib/common.sh
           manager=$(package_manager)
-          install_packages "$manager" $(for c in Xvnc vncpasswd xdpyinfo xauth               websockify dbus-run-session mcookie flock python3 curl tar               sha256sum qrencode; do package_for "$manager" "$c"; done | sort -u)
+          install_packages "$manager" $(for c in Xvnc vncpasswd xdpyinfo xauth \
+              websockify dbus-run-session mcookie flock python3 curl tar \
+              sha256sum qrencode; do
+              command -v "$c" >/dev/null || package_for "$manager" "$c"
+          done | sort -u)
       - run: test/ci.sh

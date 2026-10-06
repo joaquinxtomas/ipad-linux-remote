@@ -270,20 +270,18 @@ Avoid requiring manual terminal commands for normal usage.
 - Wayland-only desktops (GNOME) are out of scope until a headless Wayland
   backend with client-driven resize is validated.
 
-### Pending verification (written 2026-10-05, not yet run on Linux)
+### Verification (2026-10-06, Linux Mint 22.3)
 
-The distribution work was written on a machine without Linux, so only
-`bash -n` syntax checks ran. Before declaring Phase 6.5 complete:
-
-1. On Linux Mint: `ipad-desktop doctor`, then `ipad-desktop up`; confirm the
-   Tailscale login QR, HTTPS enablement prompt, Serve route and final URL.
-2. Run `test/smoke.sh` to confirm resizing still works with the downloaded
-   noVNC 1.7.0 (previously validated with the distro noVNC).
-3. Check CI: package names for Fedora and openSUSE were mapped from memory
-   (`tigervnc-server`, `python3-websockify`, `xorg-x11-Xvnc`, `dbus-1`) and
-   may need correction.
-4. Confirm every distro's websockify supports `--web-auth`; if not, fall
-   back to applying the identity plugin to the WebSocket only.
+1. `ipad-desktop doctor` passes. **Pending:** run `ipad-desktop up` and
+   confirm the Tailscale login QR, HTTPS prompt, Serve route and final URL.
+2. Done: `test/smoke.sh` passes with the downloaded noVNC 1.7.0 (resize to
+   1500x1017); the internals used by `requestRemoteResize()` still exist.
+3. Done: package mapping fixed (`sha256sum` → `coreutils`, openSUSE
+   `dbus-1-daemon`). Arch ships `websockify` only in the AUR, so
+   `ipad-desktop` asks the user to install it; CI installs it with pip. All
+   five distro jobs pass locally in containers; shellcheck is clean.
+4. Done: every distro's websockify supports `--web-auth` (`test/ci.sh`
+   enforces the identity gate in all five).
 5. Known trade-off: with the identity gate on, `http://127.0.0.1:6080` returns
    403 locally. Comment out the config line for local use.
 

@@ -15,6 +15,7 @@ tailscale serve ──► websockify + noVNC (127.0.0.1) ──► Xvnc virtual 
 ## Requirements
 
 - A Linux distribution based on Debian/Ubuntu, Fedora, Arch or openSUSE.
+  On Arch, install `websockify` from the AUR first.
 - An X11 desktop: Cinnamon, XFCE, MATE, LXQt, Plasma (X11), Openbox or i3.
   GNOME is not supported because it no longer offers an X11 session.
 - A free [Tailscale](https://tailscale.com) account and the Tailscale app on
