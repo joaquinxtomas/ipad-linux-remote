@@ -105,8 +105,8 @@ No stretched 16:9 framebuffer is acceptable.
 
 **Status:** active; local noVNC connection and remote resize validated. The
 virtual session uses low-overhead Cinnamon settings, a balanced 1.25x render
-scale, native profile controls and `visualViewport`; physical iPad validation
-remains in progress.
+scale, native profile controls and `visualViewport`; validated on the physical
+iPad.
 
 Expose the virtual session through a browser-compatible remote desktop backend.
 
@@ -128,7 +128,7 @@ Safari on the iPad can interact with the virtual Linux desktop reliably.
 ## Phase 3 — Adaptive display
 
 **Status:** active; browser-driven resize, orientation events and configurable
-HiDPI render scale are implemented. Physical iPad validation remains pending.
+HiDPI render scale are implemented and validated on the physical iPad.
 
 Implement the project's main feature.
 
@@ -206,8 +206,9 @@ Do not add multimedia-oriented features unless required later.
 
 ## Phase 5 — Private remote access
 
-**Status:** prepared early as a security dependency for physical iPad testing;
-installation and cross-network validation remain pending.
+**Status:** automated. `ipad-desktop up` installs Tailscale, guides login with
+a QR code and publishes noVNC through `tailscale serve` (HTTPS, tailnet only,
+restricted by `Tailscale-User-Login`). Validated on the iPad.
 
 Install/configure Tailscale on:
 
@@ -242,7 +243,8 @@ The iPad can reach the desktop remotely while the server remains inaccessible fr
 
 **Status:** active; a single-instance `systemd --user` service, automatic
 restart, boot activation through user lingering, control-group shutdown and
-journal logging are implemented.
+journal logging are implemented. `ipad-desktop up` installs and starts the
+service; `status`, `down`, `password` and `uninstall` manage it.
 
 Add:
 
@@ -255,6 +257,35 @@ Add:
 - sensible resolution limits.
 
 Avoid requiring manual terminal commands for normal usage.
+
+## Phase 6.5 — Distribution
+
+**Status:** active. Goal: anyone can clone the repository and run one command.
+
+- Support X11 desktops on Debian/Ubuntu, Fedora, Arch and openSUSE families
+  (session auto-detection, per-distro package mapping, `doctor`).
+- Pin and checksum-verify noVNC instead of relying on distro paths.
+- Replace the LAN/Caddy idea with `tailscale serve`; Caddy was dropped.
+- CI: shellcheck plus a headless identity-gate test in each distro family.
+- Wayland-only desktops (GNOME) are out of scope until a headless Wayland
+  backend with client-driven resize is validated.
+
+### Pending verification (written 2026-10-05, not yet run on Linux)
+
+The distribution work was written on a machine without Linux, so only
+`bash -n` syntax checks ran. Before declaring Phase 6.5 complete:
+
+1. On Linux Mint: `ipad-desktop doctor`, then `ipad-desktop up`; confirm the
+   Tailscale login QR, HTTPS enablement prompt, Serve route and final URL.
+2. Run `test/smoke.sh` to confirm resizing still works with the downloaded
+   noVNC 1.7.0 (previously validated with the distro noVNC).
+3. Check CI: package names for Fedora and openSUSE were mapped from memory
+   (`tigervnc-server`, `python3-websockify`, `xorg-x11-Xvnc`, `dbus-1`) and
+   may need correction.
+4. Confirm every distro's websockify supports `--web-auth`; if not, fall
+   back to applying the identity plugin to the WebSocket only.
+5. Known trade-off: with the identity gate on, `http://127.0.0.1:6080` returns
+   403 locally. Comment out the config line for local use.
 
 ## Phase 7 — Final validation
 
@@ -289,6 +320,12 @@ Verify:
 - reconnect;
 - orientation changes;
 - no public ports.
+
+## Phase 8 — Embedded Tailscale (future)
+
+Only after `tailscale serve` proves itself on the iPad: evaluate a single Go
+binary that joins the tailnet itself through `tsnet`, removing the system
+Tailscale install, sudo and the operator setting.
 
 ## Out of Scope
 
