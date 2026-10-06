@@ -5,3 +5,4 @@
 *.pem
 *.p12
 AGENTS.md
+__pycache__/
