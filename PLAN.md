@@ -105,8 +105,8 @@ No stretched 16:9 framebuffer is acceptable.
 
 **Status:** active; local noVNC connection and remote resize validated. The
 virtual session uses low-overhead Cinnamon settings, a balanced 1.25x render
-scale, native profile controls and `visualViewport`; physical iPad validation
-remains in progress.
+scale, native profile controls and `visualViewport`; validated on the physical
+iPad.
 
 Expose the virtual session through a browser-compatible remote desktop backend.
 
@@ -128,7 +128,7 @@ Safari on the iPad can interact with the virtual Linux desktop reliably.
 ## Phase 3 — Adaptive display
 
 **Status:** active; browser-driven resize, orientation events and configurable
-HiDPI render scale are implemented. Physical iPad validation remains pending.
+HiDPI render scale are implemented and validated on the physical iPad.
 
 Implement the project's main feature.
 
@@ -208,8 +208,7 @@ Do not add multimedia-oriented features unless required later.
 
 **Status:** automated. `ipad-desktop up` installs Tailscale, guides login with
 a QR code and publishes noVNC through `tailscale serve` (HTTPS, tailnet only,
-restricted by `Tailscale-User-Login`). Cross-network validation on the iPad
-remains pending.
+restricted by `Tailscale-User-Login`). Validated on the iPad.
 
 Install/configure Tailscale on:
 
@@ -280,14 +279,12 @@ The distribution work was written on a machine without Linux, so only
    Tailscale login QR, HTTPS enablement prompt, Serve route and final URL.
 2. Run `test/smoke.sh` to confirm resizing still works with the downloaded
    noVNC 1.7.0 (previously validated with the distro noVNC).
-3. Open the URL on the iPad from another network; confirm the identity gate
-   admits the owner and that the VNC password prompt still appears.
-4. Check CI: package names for Fedora and openSUSE were mapped from memory
+3. Check CI: package names for Fedora and openSUSE were mapped from memory
    (`tigervnc-server`, `python3-websockify`, `xorg-x11-Xvnc`, `dbus-1`) and
    may need correction.
-5. Confirm every distro's websockify supports `--web-auth`; if not, fall
+4. Confirm every distro's websockify supports `--web-auth`; if not, fall
    back to applying the identity plugin to the WebSocket only.
-6. Known trade-off: with the identity gate on, `http://127.0.0.1:6080` returns
+5. Known trade-off: with the identity gate on, `http://127.0.0.1:6080` returns
    403 locally. Comment out the config line for local use.
 
 ## Phase 7 — Final validation
