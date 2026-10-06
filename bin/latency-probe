@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Small xterm whose background toggles between magenta and green on every left
+# click. web/stats.js clicks it through VNC and times the colour change.
+if [[ ${1:-} != --inside ]]; then
+    exec xterm -title latency-probe -geometry 6x3+40+40 -b 0 +sb \
+        -e "$(readlink -f "${BASH_SOURCE[0]}")" --inside
+fi
+
+colors=('#ff00ff' '#00ff00')
+state=0
+printf '\e[?25l\e]11;%s\a\e[?1000h' "${colors[state]}"
+trap 'printf "\e[?1000l"' EXIT
+while IFS= read -rsn1 byte; do
+    [[ $byte == $'\e' ]] || continue
+    IFS= read -rsn2 rest
+    [[ $rest == '[M' ]] || continue
+    IFS= read -rsn3 event
+    [[ ${event:0:1} == ' ' ]] || continue
+    state=$((1 - state))
+    printf '\e]11;%s\a' "${colors[state]}"
+done

@@ -78,6 +78,18 @@ Run the local geometry check:
 ./test/smoke.sh
 ```
 
+## Measuring performance
+
+Add `stats=1` to the URL (for example `?scale=1.25&stats=1`) to show frames
+per second, received bandwidth, remote resolution and reconnect time. To
+measure input latency, run `bin/latency-probe` inside the virtual session; it
+opens a small coloured window. Then press **Probe latency** in the overlay.
+Only timings and sizes are recorded.
+
+`./test/bench.sh [scale...]` repeats this unattended on the host with VS Code
+and reports latency, frame rate, bandwidth and CPU per process. Stop the user
+service first. Results are in `docs/perf-baseline.md`.
+
 Both VNC and HTTP/WebSocket listen on loopback, and Xvnc requires VNC
 authentication. Do not place the password file in this repository.
 

@@ -87,7 +87,7 @@ cleanup() {
 trap cleanup EXIT INT TERM HUP
 
 mkdir -p "$web_root"
-for asset in index.html manifest.webmanifest icon.svg; do
+for asset in index.html stats.js manifest.webmanifest icon.svg; do
     ln -sfn "$project_dir/web/$asset" "$web_root/$asset"
 done
 ln -sfn /usr/share/novnc/core "$web_root/core"

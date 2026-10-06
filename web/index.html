@@ -120,6 +120,9 @@
         const maxPixels = 4000000;
         const maxAxis = 2560;
         let renderScale = scales.includes(requestedScale) ? requestedScale : 1.25;
+        const stats = parameter('stats', null) === null
+            ? null : new (await import('./stats.js')).Stats();
+        let benchPending = parameter('bench', null) !== null;
         let rfb;
         let password = parameter('password', undefined);
         let authenticationFailed = false;
@@ -202,8 +205,14 @@
                 auth.hidden = true;
                 setStatus(`Connected · ${renderScale}×`, true);
                 scheduleResize();
+                stats?.attach(rfb);
+                if (stats && benchPending) {
+                    benchPending = false;
+                    stats.bench();
+                }
             });
             rfb.addEventListener('disconnect', () => {
+                stats?.disconnected();
                 if (!reconnectAllowed) return;
                 if (authenticationFailed) {
                     credentialRequest = false;
