@@ -285,6 +285,59 @@ Avoid requiring manual terminal commands for normal usage.
 5. Known trade-off: with the identity gate on, `http://127.0.0.1:6080` returns
    403 locally. Comment out the config line for local use.
 
+## Phase 6.7 — Video streaming backend (Selkies)
+
+**Status:** active.
+
+### Decision — 2026-10-09
+
+On the iPad, VNC reached ~30 fps for ordinary windows but stayed below
+20 fps while scrolling VS Code even with `compression=2&quality=7`. VNC sends
+each changed region as an independent JPEG that noVNC decodes in JavaScript,
+so scrolling large text areas cannot become fluid by tuning alone.
+
+[Selkies](https://github.com/selkies-project/selkies) 2.0 (MPL-2.0) streams
+the X display as H.264 video encoded on the GPU (NVENC, VA-API, software x264
+fallback) and decoded by the browser's hardware decoder. A prototype on the
+iPad was clearly fluid. It fits the existing architecture:
+
+- one WebSocket over a single TCP port (no WebRTC/UDP, no TURN), so it stays
+  behind `tailscale serve` on loopback with the same URL and QR code;
+- binds to `localhost` by default and requires HTTP basic auth;
+- resizes a virtual Xvfb display to the browser viewport (RandR), so geometry
+  remains native and undistorted;
+- installs from PyPI into a private venv, without root.
+
+Rejected alternatives: KasmVNC (still per-rectangle VNC encoding), xrdp with a
+native RDP client and Sunshine/Moonlight (native iPad apps, against the
+browser-first rule; Moonlight is game streaming).
+
+### Design
+
+- `bin/start-selkies` mirrors `bin/start-desktop`: Xvfb on `:98`, desktop in
+  `dbus-run-session`, Selkies on `127.0.0.1:6080`, the same launcher lock.
+- The client requests the native Retina size; the desktop is scaled by
+  Cinnamon (`scaling-factor`, `text-scaling-factor`) inside an isolated dconf
+  profile so the physical desktop's settings never change.
+- Selkies' own DPI handling is pinned to 96 and its `HOME` points to a state
+  directory: it would otherwise write `~/.Xresources` and `~/.xsettingsd`,
+  which the physical session also reads.
+- `REMOTE_DESKTOP_BACKEND=vnc` keeps the previous backend as a fallback.
+
+### Security trade-off
+
+Selkies has no hook for the websockify identity plugin, so the
+`Tailscale-User-Login` check does not apply to this backend. Access requires
+being inside the tailnet (`tailscale serve`, never Funnel) plus Selkies basic
+auth with a generated password. Restricting the node with Tailscale ACLs is the
+recommended extra layer.
+
+### Gate
+
+VS Code scrolling is fluid on the iPad, the desktop fills the viewport at a
+readable size without distortion, and the physical desktop's settings and home
+files stay untouched.
+
 ## Phase 7 — Final validation
 
 Test the actual workflow:
