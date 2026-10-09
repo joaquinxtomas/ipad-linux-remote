@@ -12,31 +12,51 @@ current implementation.
 No build step, no package manager, no application server. The MVP is glue
 around mature components:
 
+Default backend (Selkies, `REMOTE_DESKTOP_BACKEND=selkies`):
+
 ```text
-iPad Safari/PWA ── web/index.html (noVNC RFB client, ES module)
+iPad Safari/PWA ── Selkies web client (H.264 via WebCodecs)
       │  https://<host>.<tailnet>.ts.net  (tailscale serve, tailnet only)
-tailscale serve  (TLS; sets Tailscale-User-Login)
-      │  127.0.0.1:6080
-websockify  (serves web root + WebSocket→TCP proxy, loopback only;
-             --web-auth with lib/tailscale_identity.py → 403 for other logins)
-      │  127.0.0.1:5998
-Xvnc :98    (TigerVNC: virtual X display + VNC server, -localhost, VncAuth,
-             -AcceptSetDesktopSize=1)
+tailscale serve  (TLS)
+      │  127.0.0.1:6080  (one WebSocket: video + input + clipboard)
+Selkies 2.0  (Python venv; HTTP basic auth, user `ipad`; NVENC/VA-API/x264;
+              resizes the display to the client via RandR)
       │
-X11 desktop (auto-detected; Cinnamon on the main host, 2D mode)
+Xvfb :98    (8192x4096 framebuffer, RandR-resized to the client size)
+      │
+Cinnamon    (cinnamon-session-cinnamon2d in dbus-run-session; UI scale from
+             an isolated dconf profile)
 ```
 
-Runtime dependencies come from distro packages (TigerVNC, websockify, …;
-per-distro mapping in `lib/common.sh`). noVNC is pinned (1.7.0), downloaded
-and checksum-verified into `$XDG_DATA_HOME/remote-desktop/`, with distro
-paths as fallback.
+Fallback backend (`REMOTE_DESKTOP_BACKEND=vnc`):
+
+```text
+iPad Safari/PWA ── web/index.html (noVNC RFB client, ES module)
+      │  tailscale serve → 127.0.0.1:6080
+websockify  (web root + WebSocket→TCP proxy, loopback only;
+             --web-auth with lib/tailscale_identity.py → 403 for other logins)
+      │  127.0.0.1:5998
+Xvnc :98    (TigerVNC, -localhost, VncAuth, -AcceptSetDesktopSize=1)
+      │
+X11 desktop (auto-detected; bare `cinnamon` window manager)
+```
+
+Runtime dependencies come from distro packages (Xvfb, TigerVNC, websockify,
+…; per-distro mapping in `lib/common.sh`). Selkies is pinned
+(`SELKIES_VERSION`, 2.0.0) and installed from PyPI into
+`$XDG_DATA_HOME/remote-desktop/selkies-<version>/`. noVNC is pinned (1.7.0),
+downloaded and checksum-verified, with distro paths as fallback. Phase 6.7 in
+`PLAN.md` records why Selkies was chosen.
 
 ## Layout
 
 - `bin/ipad-desktop` — user-facing CLI: `up` (deps, noVNC, Tailscale login,
   password, `tailscale serve` route, service), `status`, `down`, `doctor`,
   `password`, `uninstall`, and `run` (used by the service).
-- `bin/start-desktop` — the session launcher: validates env, checks deps and
+- `bin/start-selkies` — the Selkies launcher (default backend): validates env
+  and the password file mode, takes the shared `flock`, starts Xvfb → desktop
+  (own process group) → Selkies, and tears everything down when any exits.
+- `bin/start-desktop` — the VNC launcher: validates env, checks deps and
   the password file mode, takes a `flock`, starts Xvnc → desktop → websockify,
   and tears everything down when any of them exits.
 - `lib/common.sh` — shared helpers: distro/package mapping, session
@@ -49,25 +69,34 @@ paths as fallback.
   reconnect logic. Inline CSS/JS, no framework.
 - `systemd/remote-desktop.service` — `systemd --user` unit; runs the symlink
   `~/.local/bin/ipad-desktop run`, so repo edits apply on restart.
-- `test/smoke.sh` — end-to-end check (see below); `test/ci.sh` — headless
+- `test/smoke-selkies.sh`, `test/smoke.sh` — end-to-end checks for each
+  backend (see below); `test/ci.sh` — headless
   identity-gate check run per distro family by `.github/workflows/ci.yml`.
 - `web/stats.js`, `bin/latency-probe`, `test/bench.sh` — measurement tooling;
   `docs/perf-baseline.md` holds the numbers.
 - Runtime state lives in `$XDG_RUNTIME_DIR/remote-desktop/` (lock, Xauthority,
   web root). The VNC password lives in `~/.config/remote-desktop/vnc.passwd`
-  (mode 600, never in the repo); `~/.config/remote-desktop/config` holds
-  `REMOTE_DESKTOP_ALLOWED_USERS` (written by `ipad-desktop up`).
+  and the Selkies password in `~/.config/remote-desktop/selkies.passwd` (both
+  mode 600, never in the repo). `~/.config/remote-desktop/config` holds
+  `KEY=value` settings (`REMOTE_DESKTOP_BACKEND`,
+  `REMOTE_DESKTOP_ALLOWED_USERS`, …) that `ipad-desktop` loads unless the
+  environment already sets them. Selkies runs with
+  `HOME=$XDG_STATE_HOME/remote-desktop/selkies-home`; the virtual Cinnamon
+  uses the dconf database `~/.config/dconf/remote_desktop`.
 
 ## Configuration
 
-Environment variables read by `bin/start-desktop`:
-`REMOTE_DESKTOP_DISPLAY` (`:98`, never `:0`), `REMOTE_DESKTOP_VNC_PORT` (5998),
-`REMOTE_DESKTOP_WEB_PORT` (6080), `REMOTE_DESKTOP_RENDER_SCALE` (`1`, `1.25`,
-`1.5`), `REMOTE_DESKTOP_VNC_PASSWORD_FILE`, `REMOTE_DESKTOP_ALLOWED_USERS`
-(Tailscale logins; empty disables the identity gate). `lib/common.sh` also
-reads `REMOTE_DESKTOP_SESSION` and `REMOTE_DESKTOP_NOVNC_DIR`.
+Shared: `REMOTE_DESKTOP_BACKEND` (`selkies` | `vnc`), `REMOTE_DESKTOP_DISPLAY`
+(`:98`, never `:0`), `REMOTE_DESKTOP_WEB_PORT` (6080), `REMOTE_DESKTOP_SESSION`.
+Selkies: `REMOTE_DESKTOP_UI_SCALE` (`1` | `2`, default 2),
+`REMOTE_DESKTOP_TEXT_SCALE` (0.5–2, default 1),
+`REMOTE_DESKTOP_SELKIES_PASSWORD_FILE`, `REMOTE_DESKTOP_SELKIES_DIR`.
+VNC: `REMOTE_DESKTOP_VNC_PORT` (5998), `REMOTE_DESKTOP_RENDER_SCALE` (`1`,
+`1.25`, `1.5`), `REMOTE_DESKTOP_VNC_PASSWORD_FILE`,
+`REMOTE_DESKTOP_ALLOWED_USERS` (Tailscale logins; empty disables the identity
+gate), `REMOTE_DESKTOP_NOVNC_DIR`.
 
-Client URL parameters (query or hash; hash wins): `scale`, `quality` (0–9,
+noVNC client URL parameters (query or hash; hash wins): `scale`, `quality` (0–9,
 default 9), `compression` (0–9, default 0), `password` (hash only, used by the
 smoke test).
 
@@ -76,12 +105,21 @@ smoke test).
 ```sh
 ./bin/ipad-desktop up                      # full setup + service
 ./bin/ipad-desktop doctor                  # check deps, no changes
-./bin/start-desktop                        # foreground session on 127.0.0.1:6080
+./bin/start-selkies                        # foreground Selkies session on 127.0.0.1:6080
+./bin/start-desktop                        # foreground VNC session on 127.0.0.1:6080
+./test/smoke-selkies.sh                    # end-to-end Selkies test
 ./test/ci.sh                               # headless identity-gate test
 ./test/smoke.sh                            # end-to-end geometry/auth test
 systemctl --user status remote-desktop.service
 journalctl --user -u remote-desktop.service -f
 ```
+
+`test/smoke-selkies.sh` (same display, port and lock; stop the service first)
+checks 401/200 basic auth, the single-instance lock, that a 1200×900 @2x
+headless Firefox resizes Xvfb to ~2400×1628, that the virtual dconf profile
+has `scaling-factor` 2 while the physical one is unchanged, that no
+`~/.Xresources`/`~/.xsettingsd` appear, and that no process with
+`DISPLAY=:98` outlives the launcher.
 
 `test/smoke.sh` uses display `:98`, port 6080 and the same launcher lock as the
 service. Stop the service first (`systemctl --user stop remote-desktop.service`)
@@ -98,17 +136,26 @@ per-process CPU. `BENCH_PARAMS` adds client hash parameters and
 `BENCH_LAUNCHER` swaps the launcher. Record results in `docs/perf-baseline.md`
 and compare against them before and after any performance change.
 
-No formatter or linter is configured; run `shellcheck bin/* test/*.sh` if it is
-installed.
+CI runs `shellcheck -x` on the shell scripts (`.shellcheckrc` allows the
+`a && b || true` idiom) on every push; run the same command from
+`.github/workflows/ci.yml` locally before committing.
 
 ## Invariants to preserve
 
-- Xvnc and websockify stay on loopback; remote access goes only through
-  `tailscale serve` plus the identity gate. Never use `tailscale funnel`.
-- Resolution adapts by resizing Xvnc (`SetDesktopSize`); `rfb.scaleViewport`
-  only applies uniform residual scaling. Never scale X and Y independently.
-- Resize limits live in two places and must stay in sync: allowed scales in
-  `bin/start-desktop` and `web/index.html` (`scales`), plus the client caps
+- Selkies, Xvnc and websockify stay on loopback; remote access goes only
+  through `tailscale serve`. Never use `tailscale funnel`. Selkies has no
+  Tailscale identity gate (basic auth only); do not weaken its auth.
+- Selkies must not touch the user's real home or desktop settings: keep
+  `--scaling-dpi=96` (it otherwise writes `~/.Xresources`/`~/.xsettingsd`),
+  its private `HOME`, and the isolated `DCONF_PROFILE` (`user-db` names must
+  not contain hyphens or `gsettings` hangs).
+- The Selkies desktop runs in its own process group and no child inherits the
+  lock fd; `cinnamon-session` survives its X server otherwise.
+- Resolution adapts by resizing the X display (Selkies: RandR on Xvfb to the
+  client's native pixels; VNC: `SetDesktopSize`); presentation scaling is
+  uniform only. Never scale X and Y independently.
+- VNC resize limits live in two places and must stay in sync: allowed scales
+  in `bin/start-desktop` and `web/index.html` (`scales`), plus the client caps
   `maxAxis = 2560` and `maxPixels = 4000000` documented in `README.md`.
 - `requestRemoteResize()` uses noVNC internals (`_sock`,
   `_supportsSetDesktopSize`, `_screenID`, `_screenFlags`). Re-check them whenever
@@ -131,7 +178,8 @@ installed.
 
 ## Current focus
 
-Phases 2, 3, 5 and 6 are validated on the physical iPad. Phase 6.5
-(distribution: `ipad-desktop`, noVNC 1.7.0 pin, multi-distro CI) was written
-without Linux and still needs the verification list in `PLAN.md`. Phase 4
+Phase 6.7 (Selkies video backend) is implemented and passes
+`test/smoke-selkies.sh`; it still needs validation on the iPad through the
+service (geometry, UI scale, keyboard/clipboard, Safari basic auth in the
+home-screen app). Phase 6.5 only lacks a final `ipad-desktop up` run. Phase 4
 (programming UX) and Phase 7 (final validation) are not started.
