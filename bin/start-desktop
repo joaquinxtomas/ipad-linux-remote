@@ -75,7 +75,9 @@ web_pid=
 
 cleanup() {
     [[ -n $web_pid ]] && kill "$web_pid" 2>/dev/null || true
-    [[ -n $desktop_pid ]] && kill "$desktop_pid" 2>/dev/null || true
+    # The desktop runs in its own process group: dbus-run-session does not
+    # stop the session services (gvfs, portals, ...) it started.
+    [[ -n $desktop_pid ]] && kill -TERM -- "-$desktop_pid" 2>/dev/null || true
     [[ -n $xvnc_pid ]] && kill "$xvnc_pid" 2>/dev/null || true
     [[ -n $web_pid ]] && wait "$web_pid" 2>/dev/null || true
     [[ -n $desktop_pid ]] && wait "$desktop_pid" 2>/dev/null || true
@@ -96,7 +98,7 @@ xauth -f "$auth_file" add "$display" . "$(mcookie)"
 
 Xvnc "$display" -geometry 1366x1024 -depth 24 -localhost \
     -SecurityTypes VncAuth -PasswordFile "$password_file" \
-    -AcceptSetDesktopSize=1 -rfbport "$vnc_port" -auth "$auth_file" &
+    -AcceptSetDesktopSize=1 -rfbport "$vnc_port" -auth "$auth_file" 9>&- &
 xvnc_pid=$!
 
 for _ in {1..50}; do
@@ -114,8 +116,8 @@ XAUTHORITY=$auth_file xdpyinfo -display "$display" >/dev/null 2>&1 || {
 mapfile -t session_env < <(session_tuning "$session")
 mapfile -t session_args < <(session_arguments "$session" "$display")
 DISPLAY=$display XAUTHORITY=$auth_file PATH="$project_dir/bin:$PATH" \
-    env "${session_env[@]}" dbus-run-session -- \
-    "$session" "${session_args[@]}" &
+    env "${session_env[@]}" setsid dbus-run-session -- \
+    "$session" "${session_args[@]}" 9>&- &
 desktop_pid=$!
 
 auth_args=()
@@ -125,7 +127,7 @@ if [[ -n $allowed_users ]]; then
 fi
 PYTHONPATH="$project_dir/lib${PYTHONPATH:+:$PYTHONPATH}" \
     websockify "${auth_args[@]}" --web "$web_root" "$web_bind:$web_port" \
-    "127.0.0.1:$vnc_port" &
+    "127.0.0.1:$vnc_port" 9>&- &
 web_pid=$!
 
 echo "Desktop: $session; local URL http://$web_bind:$web_port/?scale=$render_scale"

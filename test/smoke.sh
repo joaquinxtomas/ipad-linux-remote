@@ -89,4 +89,20 @@ firefox_pid=$!
 sleep 3
 [[ $(grep -c 'AuthFailureException' /tmp/remote-desktop-smoke.log || true) == 1 ]]
 
+
+# Stopping the launcher must take the whole virtual session with it.
+kill "$firefox_pid" 2>/dev/null || true
+wait "$firefox_pid" 2>/dev/null || true
+firefox_pid=
+kill "$launcher_pid"
+wait "$launcher_pid" 2>/dev/null || true
+launcher_pid=
+leftovers=
+for _ in {1..40}; do
+    leftovers=$(grep -lzx "DISPLAY=$display" /proc/[0-9]*/environ 2>/dev/null || true)
+    [[ -z $leftovers ]] && break
+    sleep 0.25
+done
+[[ -z $leftovers ]] || { echo "processes outlived the launcher: $leftovers" >&2; exit 1; }
+
 echo "smoke: balanced noVNC connected and remotely resized Xvnc to $size"
