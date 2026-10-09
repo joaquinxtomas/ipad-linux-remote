@@ -10,6 +10,12 @@ NOVNC_URL=https://github.com/novnc/noVNC/archive/refs/tags/v$NOVNC_VERSION.tar.g
 data_home=${XDG_DATA_HOME:-${HOME:?}/.local/share}
 novnc_home=$data_home/remote-desktop/noVNC-$NOVNC_VERSION
 
+# ponytail: only selkies itself is pinned; pin its Python dependencies with a
+# hash-locked requirements file if a release breaks the venv.
+SELKIES_VERSION=2.0.0
+# shellcheck disable=SC2034  # used by bin/ipad-desktop and bin/start-selkies
+selkies_venv=$data_home/remote-desktop/selkies-$SELKIES_VERSION
+
 # Supported X11 desktops, most preferred first.
 SESSIONS=(cinnamon xfce4-session mate-session startlxqt startplasma-x11
     openbox-session i3)
@@ -33,6 +39,20 @@ session_tuning() {
         cinnamon)
             printf '%s\n' CINNAMON_2D=1 CINNAMON_SLOWDOWN_FACTOR=0.0001 \
                 MUFFIN_NO_SHADOWS=1 CLUTTER_DEFAULT_FPS=60 ;;
+    esac
+}
+
+# Command that starts a full desktop session, settings daemons included.
+# The VNC backend runs the bare window manager instead (session_arguments).
+session_command() {
+    case $1 in
+        cinnamon)
+            if command -v cinnamon-session-cinnamon2d >/dev/null; then
+                echo cinnamon-session-cinnamon2d
+            else
+                echo cinnamon-session
+            fi ;;
+        *) echo "$1" ;;
     esac
 }
 
@@ -95,6 +115,11 @@ package_for() {
         zypper:xrandr) echo xrandr ;;
         zypper:websockify) echo python3-websockify ;;
         zypper:dbus-run-session) echo dbus-1-daemon ;;
+        apt:Xvfb) echo xvfb ;;
+        apt:venv) echo python3-venv ;;
+        dnf:Xvfb | zypper:Xvfb) echo xorg-x11-server-Xvfb ;;
+        pacman:Xvfb) echo xorg-server-xvfb ;;
+        *:venv) [[ $manager == pacman ]] && echo python || echo python3 ;;
         *:mcookie | *:flock) echo util-linux ;;
         *:sha256sum) echo coreutils ;;
         *:python3) [[ $manager == pacman ]] && echo python || echo python3 ;;

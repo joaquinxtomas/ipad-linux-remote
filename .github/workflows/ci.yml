@@ -7,7 +7,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: shellcheck -x bin/ipad-desktop bin/start-desktop bin/firefox lib/common.sh test/*.sh
+      - run: shellcheck -x bin/ipad-desktop bin/start-desktop bin/start-selkies bin/firefox lib/common.sh test/*.sh
       - run: python3 -m py_compile lib/tailscale_identity.py
 
   # Checks that dependency installation and session detection work per distro.

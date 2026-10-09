@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+# Streams the virtual desktop as GPU-encoded video with Selkies.
+# Same display, port and lock as bin/start-desktop, which stays as the VNC
+# fallback; see PLAN.md, Phase 6.7.
+set -euo pipefail
+
+display=${REMOTE_DESKTOP_DISPLAY:-:98}
+web_port=${REMOTE_DESKTOP_WEB_PORT:-6080}
+ui_scale=${REMOTE_DESKTOP_UI_SCALE:-2}
+text_scale=${REMOTE_DESKTOP_TEXT_SCALE:-1}
+config_home=${XDG_CONFIG_HOME:-${HOME:?}/.config}
+state_home=${XDG_STATE_HOME:-$HOME/.local/state}
+password_file=${REMOTE_DESKTOP_SELKIES_PASSWORD_FILE:-$config_home/remote-desktop/selkies.passwd}
+project_dir=$(readlink -f "$(dirname "${BASH_SOURCE[0]}")/..")
+# shellcheck source=lib/common.sh
+source "$project_dir/lib/common.sh"
+selkies_dir=${REMOTE_DESKTOP_SELKIES_DIR:-$selkies_venv}
+
+[[ $display =~ ^:[1-9][0-9]*$ ]] || {
+    echo "REMOTE_DESKTOP_DISPLAY must be an X display other than :0" >&2
+    exit 2
+}
+[[ $web_port =~ ^[0-9]+$ ]] && ((web_port >= 1024 && web_port <= 65535)) || {
+    echo "REMOTE_DESKTOP_WEB_PORT must be between 1024 and 65535" >&2
+    exit 2
+}
+[[ $ui_scale == 1 || $ui_scale == 2 ]] || {
+    echo "REMOTE_DESKTOP_UI_SCALE must be 1 or 2" >&2
+    exit 2
+}
+[[ $text_scale =~ ^(0\.[5-9][0-9]*|1(\.[0-9]+)?|2(\.0+)?)$ ]] || {
+    echo "REMOTE_DESKTOP_TEXT_SCALE must be between 0.5 and 2" >&2
+    exit 2
+}
+
+session=$(detect_session) || {
+    echo "No supported X11 desktop found; set REMOTE_DESKTOP_SESSION" >&2
+    exit 1
+}
+session_cmd=$(session_command "$session")
+[[ -x $selkies_dir/bin/python ]] || {
+    echo "Selkies not found in $selkies_dir; run: ipad-desktop up" >&2
+    exit 1
+}
+for command in Xvfb xdpyinfo xrandr dbus-run-session xauth mcookie stat flock "$session_cmd"; do
+    command -v "$command" >/dev/null || {
+        echo "Missing dependency: $command" >&2
+        exit 1
+    }
+done
+
+[[ -f $password_file && -r $password_file && -s $password_file ]] || {
+    echo "Create the Selkies password first: ipad-desktop password" >&2
+    exit 1
+}
+password_mode=$(stat -c %a "$password_file")
+(((8#$password_mode & 8#077) == 0)) || {
+    echo "Selkies password file must not be accessible by group or others" >&2
+    exit 1
+}
+
+runtime_dir=${XDG_RUNTIME_DIR:-/tmp}/remote-desktop
+auth_file=$runtime_dir/Xauthority.${display#:}
+mkdir -p "$runtime_dir"
+chmod 700 "$runtime_dir"
+exec 9>"$runtime_dir/launcher.lock"
+flock -n 9 || {
+    echo "Remote desktop is already running" >&2
+    exit 1
+}
+
+# Selkies persists DPI in ~/.Xresources and ~/.xsettingsd, which the physical
+# session reads too; give it a home of its own.
+selkies_home=$state_home/remote-desktop/selkies-home
+mkdir -p "$selkies_home"
+chmod 700 "$selkies_home"
+
+# The virtual session keeps its desktop settings (UI scale above all) in its
+# own dconf database, seeded once from the user's so the theme carries over.
+dconf_dir=$config_home/dconf
+dconf_profile=$runtime_dir/dconf-profile
+# The name must be a valid D-Bus object path element (no hyphens).
+printf 'user-db:remote_desktop\n' >"$dconf_profile"
+if [[ ! -e $dconf_dir/remote_desktop && -f $dconf_dir/user ]]; then
+    cp -- "$dconf_dir/user" "$dconf_dir/remote_desktop"
+fi
+
+xvfb_pid=
+desktop_pid=
+selkies_pid=
+
+cleanup() {
+    [[ -n $selkies_pid ]] && kill "$selkies_pid" 2>/dev/null || true
+    # The desktop runs in its own process group: dbus-run-session does not
+    # stop its children, and cinnamon-session outlives its X server.
+    [[ -n $desktop_pid ]] && kill -TERM -- "-$desktop_pid" 2>/dev/null || true
+    [[ -n $xvfb_pid ]] && kill "$xvfb_pid" 2>/dev/null || true
+    [[ -n $selkies_pid ]] && wait "$selkies_pid" 2>/dev/null || true
+    [[ -n $desktop_pid ]] && wait "$desktop_pid" 2>/dev/null || true
+    [[ -n $xvfb_pid ]] && wait "$xvfb_pid" 2>/dev/null || true
+    rm -f -- "$auth_file"
+}
+trap cleanup EXIT INT TERM HUP
+
+touch "$auth_file"
+chmod 600 "$auth_file"
+xauth -f "$auth_file" add "$display" . "$(mcookie)"
+
+# The initial framebuffer bounds every later RandR resize.
+# Children never inherit the lock (fd 9), so a straggler cannot block the
+# next start.
+Xvfb "$display" -screen 0 8192x4096x24 -nolisten tcp -noreset -s 0 -dpms \
+    -auth "$auth_file" 9>&- &
+xvfb_pid=$!
+
+for _ in {1..50}; do
+    kill -0 "$xvfb_pid" 2>/dev/null || wait "$xvfb_pid"
+    XAUTHORITY=$auth_file xdpyinfo -display "$display" >/dev/null 2>&1 && break
+    sleep 0.1
+done
+XAUTHORITY=$auth_file xdpyinfo -display "$display" >/dev/null 2>&1 || {
+    echo "Xvfb did not become ready on $display" >&2
+    exit 1
+}
+
+# Start the desktop at an iPad-like size; the first client resizes it.
+x() { DISPLAY=$display XAUTHORITY=$auth_file xrandr "$@" >/dev/null 2>&1; }
+x --newmode 1366x1024 60 1366 1367 1368 1369 1024 1025 1026 1027 || true
+x --addmode screen 1366x1024 && x --output screen --mode 1366x1024 || true
+
+host_session_vars=(-u DBUS_SESSION_BUS_ADDRESS -u WAYLAND_DISPLAY -u SESSION_MANAGER
+    -u XDG_SESSION_ID -u XDG_SEAT -u XDG_VTNR -u PULSE_SERVER)
+mapfile -t session_env < <(session_tuning "$session")
+case $session in
+    cinnamon)
+        session_env+=(XDG_CURRENT_DESKTOP=X-Cinnamon DESKTOP_SESSION=cinnamon2d
+            XDG_SESSION_TYPE=x11 DCONF_PROFILE="$dconf_profile") ;;
+esac
+# ponytail: only Cinnamon gets UI scaling; other desktops keep their own
+# settings and render at the iPad's native density (small UI).
+# shellcheck disable=SC2016  # the inner script reads its own arguments
+env "${host_session_vars[@]}" DISPLAY="$display" XAUTHORITY="$auth_file" \
+    PATH="$project_dir/bin:$PATH" "${session_env[@]}" \
+    setsid dbus-run-session -- bash -c '
+        if [[ $1 == cinnamon ]]; then
+            timeout 10 gsettings set org.cinnamon.desktop.interface scaling-factor "$2" &&
+                timeout 10 gsettings set org.cinnamon.desktop.interface text-scaling-factor "$3" ||
+                echo "warning: could not apply the UI scale" >&2
+        fi
+        exec "$4"' _ "$session" "$ui_scale" "$text_scale" "$session_cmd" 9>&- &
+desktop_pid=$!
+
+# The password travels in the environment, never on the command line.
+# DPI stays fixed at 96: the desktop scales itself (UI_SCALE/TEXT_SCALE).
+SELKIES_BASIC_AUTH_PASSWORD=$(<"$password_file") \
+    env "${host_session_vars[@]}" HOME="$selkies_home" DISPLAY="$display" \
+    XAUTHORITY="$auth_file" \
+    "$selkies_dir/bin/python" -m selkies \
+    --addr=127.0.0.1 --port="$web_port" --enable-https=false \
+    --basic-auth-user=ipad --scaling-dpi=96 --enable-resize=true \
+    --audio-enabled=false --gamepad-enabled=false --printing-enabled=false \
+    --file-transfers=none 9>&- &
+selkies_pid=$!
+
+echo "Desktop: $session via Selkies; UI scale ${ui_scale}x, text ${text_scale}x;" \
+    "local URL http://127.0.0.1:$web_port/"
+wait -n "$xvfb_pid" "$desktop_pid" "$selkies_pid"
