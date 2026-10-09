@@ -91,6 +91,8 @@ Shared: `REMOTE_DESKTOP_BACKEND` (`selkies` | `vnc`), `REMOTE_DESKTOP_DISPLAY`
 (`:98`, never `:0`), `REMOTE_DESKTOP_WEB_PORT` (6080), `REMOTE_DESKTOP_SESSION`.
 Selkies: `REMOTE_DESKTOP_UI_SCALE` (`1` | `2`, default 2),
 `REMOTE_DESKTOP_TEXT_SCALE` (0.5–2, default 1),
+`REMOTE_DESKTOP_AUTOSTART_SKIP` (default `plank`; added to Cinnamon's
+`autostart-blacklist` in the isolated dconf profile),
 `REMOTE_DESKTOP_SELKIES_PASSWORD_FILE`, `REMOTE_DESKTOP_SELKIES_DIR`.
 VNC: `REMOTE_DESKTOP_VNC_PORT` (5998), `REMOTE_DESKTOP_RENDER_SCALE` (`1`,
 `1.25`, `1.5`), `REMOTE_DESKTOP_VNC_PASSWORD_FILE`,
@@ -161,7 +163,9 @@ CI runs `shellcheck -x` on the shell scripts (`.shellcheckrc` allows the
   Safari sends no Basic credentials on the WebSocket, so the token is
   required. The client is served from a copy in `$XDG_RUNTIME_DIR` whose
   `manifest.json` start URL keeps `?token=` (aiohttp static routes do not
-  follow symlinks, so it must be a copy).
+  follow symlinks, so it must be a copy). The copy's `index.html` gets
+  `viewport-fit=cover`; without it iPadOS paints the home-indicator strip
+  black under the desktop.
 - Resolution adapts by resizing the X display (Selkies: RandR on Xvfb to the
   client's native pixels; VNC: `SetDesktopSize`); presentation scaling is
   uniform only. Never scale X and Y independently.

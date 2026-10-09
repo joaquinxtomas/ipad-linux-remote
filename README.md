@@ -79,6 +79,7 @@ remote-desktop.service` after changing them.
 | `REMOTE_DESKTOP_BACKEND` | `selkies` | `selkies` (video) or `vnc` (noVNC fallback) |
 | `REMOTE_DESKTOP_UI_SCALE` | `2` | Selkies: desktop UI scale, `1` or `2` (Cinnamon) |
 | `REMOTE_DESKTOP_TEXT_SCALE` | `1` | Selkies: text and app size, `0.5`–`2` (Cinnamon) |
+| `REMOTE_DESKTOP_AUTOSTART_SKIP` | `plank` | Selkies: autostart apps not started in the virtual session (comma-separated, Cinnamon) |
 | `REMOTE_DESKTOP_SESSION` | first installed desktop | Desktop command, e.g. `xfce4-session` |
 | `REMOTE_DESKTOP_DISPLAY` | `:98` | Virtual X display (never `:0`) |
 | `REMOTE_DESKTOP_WEB_PORT` | `6080` | Loopback web port |

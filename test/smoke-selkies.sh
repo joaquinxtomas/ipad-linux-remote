@@ -65,6 +65,9 @@ asset=$(curl -fsS -u ipad:smoketest-selkies http://127.0.0.1:6080/ \
 code=$(curl -s -o /dev/null -w '%{http_code}' -u ipad:smoketest-selkies "http://127.0.0.1:6080/$asset")
 [[ $code == 200 ]] || fail "asset $asset returned $code"
 
+curl -fsS -u ipad:smoketest-selkies http://127.0.0.1:6080/ | grep -q 'viewport-fit=cover' \
+    || fail "page does not cover the iPad safe areas"
+
 # The manifest is password-protected and keeps the token for home-screen apps.
 code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:6080/manifest.json)
 [[ $code == 401 ]] || fail "manifest served without the password ($code)"
@@ -117,6 +120,9 @@ echo "smoke-selkies: resized to ${width}x${height} for a 1200x900 @2x client"
 virtual_scale=$(DCONF_PROFILE=$runtime_dir/dconf-profile \
     gsettings get org.cinnamon.desktop.interface scaling-factor)
 [[ $virtual_scale == "uint32 2" ]] || fail "virtual UI scale is $virtual_scale"
+blacklist=$(DCONF_PROFILE=$runtime_dir/dconf-profile \
+    gsettings get org.cinnamon.SessionManager autostart-blacklist)
+[[ $blacklist == *"'plank'"* ]] || fail "plank is not skipped: $blacklist"
 now_physical=$(gsettings get org.cinnamon.desktop.interface scaling-factor 2>/dev/null || true)
 [[ $now_physical == "$physical_scale" ]] || fail "the physical UI scale changed"
 for file in "${home_files[@]}"; do
