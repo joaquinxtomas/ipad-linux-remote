@@ -58,6 +58,30 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -u ipad:smoketest-selkies http://1
 [[ $code == 200 ]] || fail "expected 200 with the password, got $code"
 ss -ltn | grep -E '[^0-9.](0\.0\.0\.0|\*|\[::\]):6080 ' && fail "port 6080 is not loopback-only"
 
+# The page and the assets it references are served.
+asset=$(curl -fsS -u ipad:smoketest-selkies http://127.0.0.1:6080/ \
+    | grep -oE 'src="\./assets/[^"]+\.js"' | head -n 1 | cut -d'"' -f2)
+[[ -n $asset ]] || fail "page references no script"
+code=$(curl -s -o /dev/null -w '%{http_code}' -u ipad:smoketest-selkies "http://127.0.0.1:6080/$asset")
+[[ $code == 200 ]] || fail "asset $asset returned $code"
+
+# The manifest is password-protected and keeps the token for home-screen apps.
+code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:6080/manifest.json)
+[[ $code == 401 ]] || fail "manifest served without the password ($code)"
+curl -fsS -u ipad:smoketest-selkies http://127.0.0.1:6080/manifest.json \
+    | grep -q '"start_url": "./?token=smoketest-selkies"' || fail "manifest lacks the token"
+
+# The stream's WebSocket needs the token, not Basic credentials.
+ws() {
+    curl -s -o /dev/null -w '%{http_code}' --max-time 3 -H 'Connection: Upgrade' \
+        -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' \
+        -H 'Sec-WebSocket-Key: c21va2V0ZXN0c2Vsa2llcw==' "$@" || true
+}
+code=$(ws -u ipad:smoketest-selkies http://127.0.0.1:6080/api/websockets)
+[[ $code == 401 ]] || fail "stream accepted without a token ($code)"
+code=$(ws http://127.0.0.1:6080/api/websockets?token=smoketest-selkies)
+[[ $code == 101 ]] || fail "stream refused the token ($code)"
+
 if REMOTE_DESKTOP_DISPLAY=$display REMOTE_DESKTOP_SELKIES_PASSWORD_FILE=$password_file \
     "$project_dir/bin/start-selkies" >"$work_dir/second.log" 2>&1; then
     fail "second launcher unexpectedly started"
@@ -71,7 +95,8 @@ user_pref("network.http.phishy-userpass-length", 255);
 user_pref("layout.css.devPixelsPerPx", "2.0");
 EOF
 firefox --headless --no-remote --profile "$profile_dir" --width 1200 --height 900 \
-    "http://ipad:smoketest-selkies@127.0.0.1:6080/" >"$work_dir/firefox.log" 2>&1 &
+    "http://ipad:smoketest-selkies@127.0.0.1:6080/?token=smoketest-selkies" \
+    >"$work_dir/firefox.log" 2>&1 &
 firefox_pid=$!
 
 size=
@@ -112,5 +137,6 @@ for _ in {1..40}; do
     sleep 0.25
 done
 [[ -z $leftovers ]] || fail "processes outlived the launcher: $leftovers"
+[[ ! -e $runtime_dir/selkies-master.header ]] || fail "master token file left behind"
 echo "smoke-selkies: auth, single instance, resize, settings isolation and" \
     "shutdown OK"

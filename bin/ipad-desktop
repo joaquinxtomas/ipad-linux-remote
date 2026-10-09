@@ -133,17 +133,22 @@ ensure_selkies() {
 }
 
 new_password() {
-    local password length=8
-    # VNC authentication only uses the first 8 characters.
-    [[ $backend == selkies ]] && length=16
-    password=$(python3 -c "import secrets, string
-a = string.ascii_letters + string.digits
-print(''.join(secrets.choice(a) for _ in range($length)))")
+    local password alphabet
+    if [[ $backend == selkies ]]; then
+        # ponytail: 8 easy-to-type characters (no 0/o, 1/l) while testing;
+        # raise the length here once the setup is final.
+        alphabet=abcdefghijkmnpqrstuvwxyz23456789
+    else
+        # VNC authentication only uses the first 8 characters.
+        alphabet=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789
+    fi
+    password=$(python3 -c "import secrets
+print(''.join(secrets.choice('$alphabet') for _ in range(8)))")
     mkdir -p "$(dirname "$password_file")"
     chmod 700 "$(dirname "$password_file")"
     if [[ $backend == selkies ]]; then
         (umask 077 && printf '%s' "$password" >"$password_file")
-        say "Login: user ipad, password $password (shown only once)"
+        say "Password: $password  (user: ipad)"
     else
         (umask 077 && printf '%s\n' "$password" | vncpasswd -f >"$password_file")
         say "VNC password (shown only once): $password"
@@ -181,6 +186,9 @@ tailscale_url() {
     host=$(tailscale_json 'print(s["Self"]["DNSName"].rstrip("."))')
     if [[ $backend == vnc ]]; then
         echo "https://$host/?scale=$render_scale"
+    elif [[ -r $password_file ]]; then
+        # The Selkies stream authenticates with the password as a token.
+        echo "https://$host/?token=$(<"$password_file")"
     else
         echo "https://$host/"
     fi
@@ -246,8 +254,11 @@ show_url() {
     url=$(tailscale_url)
     qrencode -t ANSIUTF8 "$url" 2>/dev/null || true
     say "Open on your iPad (Tailscale app connected): $url"
-    [[ $backend == selkies ]] &&
-        echo "    Log in as ipad; 'ipad-desktop password' makes a new password."
+    if [[ $backend == selkies ]]; then
+        echo "    Safari asks once for a user and password: user 'ipad', and the"
+        echo "    password is the text after 'token=' in the URL above."
+        echo "    'ipad-desktop password' makes a new one; scan the new QR afterwards."
+    fi
     echo "    Then use Safari's Share > Add to Home Screen for a fullscreen app."
 }
 
@@ -335,7 +346,8 @@ case ${1:-up} in
     password)
         ensure_dependencies
         new_password
-        systemctl --user try-restart "$unit" 2>/dev/null || true ;;
+        systemctl --user try-restart "$unit" 2>/dev/null || true
+        command -v tailscale >/dev/null && show_url ;;
     uninstall) cmd_uninstall ;;
     -h | --help | help) usage ;;
     *) usage >&2; exit 2 ;;

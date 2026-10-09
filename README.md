@@ -40,15 +40,19 @@ cd ipad-linux-remote
 
 1. installs missing packages with your package manager (asks first);
 2. installs a pinned Selkies into a private Python environment (no root);
-3. generates a password for the user `ipad` and shows it once;
+3. generates a short password and shows it once;
 4. installs Tailscale with the official script if needed and prints a login
    QR code;
 5. publishes the desktop only inside your tailnet with `tailscale serve`;
 6. installs and starts a `systemd --user` service that survives reboots;
-7. prints the iPad URL as a QR code.
+7. prints the iPad URL as a QR code; with Selkies the URL carries the
+   password as `?token=…`, which the video stream uses to authenticate.
 
-On the iPad, open the URL in Safari, log in as `ipad` with the password from
-step 3, and use **Share → Add to Home Screen** for a fullscreen app. If Tailscale asks you to enable HTTPS certificates for your
+On the iPad, scan the QR code (or open the URL) in Safari. Safari asks once
+for a user and password: the user is `ipad` and the password is the text after
+`token=` in the URL. Then use **Share → Add to Home Screen** for a fullscreen
+app; it keeps the token. `ipad-desktop password` makes a new password and
+prints the new QR code. If Tailscale asks you to enable HTTPS certificates for your
 tailnet, follow the link it prints once.
 
 ## Commands
@@ -112,9 +116,13 @@ run alongside Firefox on the physical desktop (snap and Flatpak included).
 - Nothing listens on a public or LAN interface: Selkies (or Xvnc and
   websockify) bind to `127.0.0.1`, and only `tailscale serve` reaches them,
   over HTTPS, from devices in your tailnet.
-- Selkies requires its password (user `ipad`). It cannot check the
-  Tailscale identity, so keep the tailnet to your own devices or restrict
-  this machine with Tailscale ACLs.
+- Selkies requires its password (user `ipad`) for the page, and the same
+  secret as a session token for the video stream (Safari does not send Basic
+  credentials on WebSockets). The URL and QR code therefore contain it: treat
+  them like the password. Selkies cannot check the Tailscale identity, so keep
+  the tailnet to your own devices or restrict this machine with Tailscale ACLs.
+- The password is short (8 characters) while the setup is being tested;
+  lengthen it in `new_password` in `bin/ipad-desktop` when it is final.
 - With the VNC backend, requests must also carry an allowed
   `Tailscale-User-Login` identity (others receive 403), and the VNC password
   is a second layer.

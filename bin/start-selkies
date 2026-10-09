@@ -58,6 +58,13 @@ password_mode=$(stat -c %a "$password_file")
     echo "Selkies password file must not be accessible by group or others" >&2
     exit 1
 }
+# The password doubles as the session token in the URL, so keep it URL-safe.
+secret=$(<"$password_file")
+[[ $secret =~ ^[A-Za-z0-9_-]{6,128}$ ]] || {
+    echo "The Selkies password must be 6-128 letters, digits, '-' or '_';" \
+        "run: ipad-desktop password" >&2
+    exit 1
+}
 
 runtime_dir=${XDG_RUNTIME_DIR:-/tmp}/remote-desktop
 auth_file=$runtime_dir/Xauthority.${display#:}
@@ -85,6 +92,28 @@ if [[ ! -e $dconf_dir/remote_desktop && -f $dconf_dir/user ]]; then
     cp -- "$dconf_dir/user" "$dconf_dir/remote_desktop"
 fi
 
+# Safari does not attach Basic credentials to the stream's WebSocket, so
+# Selkies runs in secure mode: Basic auth guards the page, and the WebSocket
+# carries the same secret as a session token (?token=). The master token only
+# provisions that token and never leaves this machine.
+master_token=$(python3 -c 'import secrets; print(secrets.token_hex(24))')
+master_header=$runtime_dir/selkies-master.header
+(umask 077 && printf 'Authorization: Bearer %s\n' "$master_token" >"$master_header")
+
+# The client as packaged, except a manifest whose start URL keeps the token:
+# an app added to the iPad home screen opens the manifest's start URL.
+web_root=$runtime_dir/selkies-web
+package_web=$("$selkies_dir/bin/python" -c 'import os, selkies
+print(os.path.join(os.path.dirname(selkies.__file__), "selkies_web"))')
+# A copy, not symlinks: Selkies' static routes do not follow them.
+rm -rf -- "$web_root"
+(umask 077 && cp -r -- "$package_web" "$web_root")
+(umask 077 && SECRET=$secret python3 -c 'import json, os, sys
+manifest = json.load(sys.stdin)
+manifest.update(name="iPad Linux Remote", short_name="Linux Remote",
+                start_url="./?token=" + os.environ["SECRET"])
+json.dump(manifest, sys.stdout)' <"$package_web/manifest.json" >"$web_root/manifest.json")
+
 xvfb_pid=
 desktop_pid=
 selkies_pid=
@@ -98,7 +127,8 @@ cleanup() {
     [[ -n $selkies_pid ]] && wait "$selkies_pid" 2>/dev/null || true
     [[ -n $desktop_pid ]] && wait "$desktop_pid" 2>/dev/null || true
     [[ -n $xvfb_pid ]] && wait "$xvfb_pid" 2>/dev/null || true
-    rm -f -- "$auth_file"
+    rm -f -- "$auth_file" "$master_header"
+    rm -rf -- "$web_root"
 }
 trap cleanup EXIT INT TERM HUP
 
@@ -150,17 +180,36 @@ env "${host_session_vars[@]}" DISPLAY="$display" XAUTHORITY="$auth_file" \
         exec "$4"' _ "$session" "$ui_scale" "$text_scale" "$session_cmd" 9>&- &
 desktop_pid=$!
 
-# The password travels in the environment, never on the command line.
+# Secrets travel in the environment, never on the command line.
 # DPI stays fixed at 96: the desktop scales itself (UI_SCALE/TEXT_SCALE).
-SELKIES_BASIC_AUTH_PASSWORD=$(<"$password_file") \
+SELKIES_BASIC_AUTH_PASSWORD=$secret SELKIES_MASTER_TOKEN=$master_token \
     env "${host_session_vars[@]}" HOME="$selkies_home" DISPLAY="$display" \
     XAUTHORITY="$auth_file" \
     "$selkies_dir/bin/python" -m selkies \
     --addr=127.0.0.1 --port="$web_port" --enable-https=false \
-    --basic-auth-user=ipad --scaling-dpi=96 --enable-resize=true \
-    --audio-enabled=false --gamepad-enabled=false --printing-enabled=false \
-    --file-transfers=none 9>&- &
+    --basic-auth-user=ipad --web-root="$web_root" --scaling-dpi=96 \
+    --enable-resize=true --audio-enabled=false --gamepad-enabled=false \
+    --printing-enabled=false --file-transfers=none 9>&- &
 selkies_pid=$!
+
+# Register the secret as the one session token, with keyboard/mouse control.
+# Selkies refuses stream connections until a token table exists.
+provisioned=false
+for _ in {1..120}; do
+    kill -0 "$selkies_pid" 2>/dev/null || break
+    code=$(SECRET=$secret python3 -c 'import json, os
+print(json.dumps({os.environ["SECRET"]:
+                  {"role": "controller", "slot": None, "mk_control": True}}))' |
+        curl -s -o /dev/null -w '%{http_code}' -H @"$master_header" \
+            -H 'Content-Type: application/json' --data-binary @- \
+            "http://127.0.0.1:$web_port/api/tokens" || true)
+    [[ $code == 200 ]] && { provisioned=true; break; }
+    sleep 0.25
+done
+$provisioned || {
+    echo "Could not register the session token with Selkies" >&2
+    exit 1
+}
 
 echo "Desktop: $session via Selkies; UI scale ${ui_scale}x, text ${text_scale}x;" \
     "local URL http://127.0.0.1:$web_port/"

@@ -19,8 +19,9 @@ iPad Safari/PWA ── Selkies web client (H.264 via WebCodecs)
       │  https://<host>.<tailnet>.ts.net  (tailscale serve, tailnet only)
 tailscale serve  (TLS)
       │  127.0.0.1:6080  (one WebSocket: video + input + clipboard)
-Selkies 2.0  (Python venv; HTTP basic auth, user `ipad`; NVENC/VA-API/x264;
-              resizes the display to the client via RandR)
+Selkies 2.0  (Python venv, secure mode: Basic auth `ipad` for the page, the
+              same secret as session token `?token=` for the WebSocket;
+              NVENC/VA-API/x264; resizes the display via RandR)
       │
 Xvfb :98    (8192x4096 framebuffer, RandR-resized to the client size)
       │
@@ -115,7 +116,9 @@ journalctl --user -u remote-desktop.service -f
 ```
 
 `test/smoke-selkies.sh` (same display, port and lock; stop the service first)
-checks 401/200 basic auth, the single-instance lock, that a 1200×900 @2x
+checks 401/200 basic auth, that assets are served, that the manifest is
+protected and carries the token, that the stream WebSocket needs the token
+(401 without, 101 with), the single-instance lock, that a 1200×900 @2x
 headless Firefox resizes Xvfb to ~2400×1628, that the virtual dconf profile
 has `scaling-factor` 2 while the physical one is unchanged, that no
 `~/.Xresources`/`~/.xsettingsd` appear, and that no process with
@@ -149,8 +152,16 @@ CI runs `shellcheck -x` on the shell scripts (`.shellcheckrc` allows the
   `--scaling-dpi=96` (it otherwise writes `~/.Xresources`/`~/.xsettingsd`),
   its private `HOME`, and the isolated `DCONF_PROFILE` (`user-db` names must
   not contain hyphens or `gsettings` hangs).
-- The Selkies desktop runs in its own process group and no child inherits the
-  lock fd; `cinnamon-session` survives its X server otherwise.
+- Both launchers run the desktop in its own process group and no child
+  inherits the lock fd; `cinnamon-session` and the session services survive
+  their X server otherwise. Both smoke tests check for leftovers.
+- Selkies secure mode: the password file holds one URL-safe secret used as
+  the Basic password and as the only session token (provisioned through
+  `/api/tokens` with a per-start master token kept in the runtime dir).
+  Safari sends no Basic credentials on the WebSocket, so the token is
+  required. The client is served from a copy in `$XDG_RUNTIME_DIR` whose
+  `manifest.json` start URL keeps `?token=` (aiohttp static routes do not
+  follow symlinks, so it must be a copy).
 - Resolution adapts by resizing the X display (Selkies: RandR on Xvfb to the
   client's native pixels; VNC: `SetDesktopSize`); presentation scaling is
   uniform only. Never scale X and Y independently.
