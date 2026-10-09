@@ -8,15 +8,42 @@ source "$project_dir/lib/common.sh"
 config_home=${XDG_CONFIG_HOME:-$HOME/.config}
 config_dir=$config_home/remote-desktop
 config_file=$config_dir/config
-password_file=${REMOTE_DESKTOP_VNC_PASSWORD_FILE:-$config_dir/vnc.passwd}
+
+# Settings saved by `up` apply unless the environment already sets them.
+load_config() {
+    local key value
+    [[ -f $config_file ]] || return 0
+    while IFS='=' read -r key value; do
+        [[ $key =~ ^REMOTE_DESKTOP_[A-Z_]+$ && ! -v $key ]] || continue
+        export "$key=$value"
+    done <"$config_file"
+}
+load_config
+
+backend=${REMOTE_DESKTOP_BACKEND:-selkies}
+[[ $backend == selkies || $backend == vnc ]] || {
+    echo "REMOTE_DESKTOP_BACKEND must be selkies or vnc" >&2
+    exit 2
+}
+if [[ $backend == selkies ]]; then
+    password_file=${REMOTE_DESKTOP_SELKIES_PASSWORD_FILE:-$config_dir/selkies.passwd}
+else
+    password_file=${REMOTE_DESKTOP_VNC_PASSWORD_FILE:-$config_dir/vnc.passwd}
+fi
 web_port=${REMOTE_DESKTOP_WEB_PORT:-6080}
 render_scale=${REMOTE_DESKTOP_RENDER_SCALE:-1.25}
 unit=remote-desktop.service
 unit_file=$config_home/systemd/user/$unit
 assume_yes=false
 
-REQUIRED=(Xvnc vncpasswd xdpyinfo xauth websockify dbus-run-session mcookie
-    flock python3 curl tar sha256sum qrencode)
+# `venv` stands for Python's venv/ensurepip modules, not a command.
+REQUIRED=(xdpyinfo xauth dbus-run-session mcookie flock python3 curl tar
+    sha256sum qrencode)
+if [[ $backend == selkies ]]; then
+    REQUIRED+=(Xvfb xrandr venv)
+else
+    REQUIRED+=(Xvnc vncpasswd websockify)
+fi
 
 usage() {
     cat <<EOF
@@ -26,9 +53,12 @@ Usage: ipad-desktop [--yes] <command>
   status      Show the service state and the iPad URL
   down        Stop the desktop service
   doctor      Check dependencies without changing anything
-  password    Generate a new VNC password
+  password    Generate a new desktop password
   uninstall   Remove the service and the Tailscale Serve route
   run         Run the desktop in the foreground (used by the service)
+
+The backend is Selkies (GPU video); REMOTE_DESKTOP_BACKEND=vnc selects the
+noVNC fallback. Settings live in $config_file.
 EOF
 }
 
@@ -45,7 +75,11 @@ confirm() {
 missing_commands() {
     local command
     for command in "${REQUIRED[@]}"; do
-        command -v "$command" >/dev/null || echo "$command"
+        if [[ $command == venv ]]; then
+            python3 -c 'import venv, ensurepip' 2>/dev/null || echo venv
+        else
+            command -v "$command" >/dev/null || echo "$command"
+        fi
     done
 }
 
@@ -84,15 +118,36 @@ ensure_novnc() {
     rm -f "$archive"
 }
 
+selkies_ready() {
+    "$selkies_venv/bin/python" -c 'import selkies' 2>/dev/null
+}
+
+ensure_selkies() {
+    selkies_ready && return
+    say "Installing Selkies $SELKIES_VERSION into $selkies_venv"
+    rm -rf -- "$selkies_venv"
+    python3 -m venv "$selkies_venv"
+    "$selkies_venv/bin/pip" install --quiet --upgrade pip
+    "$selkies_venv/bin/pip" install --quiet "selkies==$SELKIES_VERSION"
+    selkies_ready || die "Selkies did not install correctly"
+}
+
 new_password() {
-    local password
-    password=$(python3 -c 'import secrets, string
+    local password length=8
+    # VNC authentication only uses the first 8 characters.
+    [[ $backend == selkies ]] && length=16
+    password=$(python3 -c "import secrets, string
 a = string.ascii_letters + string.digits
-print("".join(secrets.choice(a) for _ in range(8)))')
+print(''.join(secrets.choice(a) for _ in range($length)))")
     mkdir -p "$(dirname "$password_file")"
     chmod 700 "$(dirname "$password_file")"
-    (umask 077 && printf '%s\n' "$password" | vncpasswd -f >"$password_file")
-    say "VNC password (shown only once): $password"
+    if [[ $backend == selkies ]]; then
+        (umask 077 && printf '%s' "$password" >"$password_file")
+        say "Login: user ipad, password $password (shown only once)"
+    else
+        (umask 077 && printf '%s\n' "$password" | vncpasswd -f >"$password_file")
+        say "VNC password (shown only once): $password"
+    fi
 }
 
 tailscale_json() {
@@ -124,7 +179,11 @@ tailscale_login() {
 tailscale_url() {
     local host
     host=$(tailscale_json 'print(s["Self"]["DNSName"].rstrip("."))')
-    echo "https://$host/?scale=$render_scale"
+    if [[ $backend == vnc ]]; then
+        echo "https://$host/?scale=$render_scale"
+    else
+        echo "https://$host/"
+    fi
 }
 
 ensure_serve() {
@@ -137,12 +196,25 @@ ensure_serve() {
     }
 }
 
+# Sets one KEY=value line in the config file, keeping the others.
+set_config() {
+    local key=$1 value=$2 lines=()
+    mkdir -p "$config_dir"
+    [[ -f $config_file ]] && mapfile -t lines < <(grep -v "^$key=" "$config_file" || true)
+    (umask 077 && printf '%s\n' "${lines[@]}" "$key=$value" | grep -v '^$' >"$config_file")
+}
+
 write_config() {
     local login
     login=$(tailscale_login) || die "could not read the Tailscale login name"
-    mkdir -p "$config_dir"
-    (umask 077 && printf 'REMOTE_DESKTOP_ALLOWED_USERS=%s\n' "$login" >"$config_file")
-    say "Only $login may open the desktop"
+    set_config REMOTE_DESKTOP_ALLOWED_USERS "$login"
+    set_config REMOTE_DESKTOP_BACKEND "$backend"
+    if [[ $backend == vnc ]]; then
+        say "Only $login may open the desktop"
+    else
+        # Selkies cannot check the Tailscale identity (PLAN.md, Phase 6.7).
+        say "Reachable only inside your tailnet; Selkies asks for its password"
+    fi
 }
 
 install_service() {
@@ -159,9 +231,11 @@ install_service() {
 wait_ready() {
     local _ code
     for _ in {1..100}; do
-        # 403 is expected: local requests carry no Tailscale identity.
-        code=$(curl -so /dev/null -w '%{http_code}'             "http://127.0.0.1:$web_port/" 2>/dev/null || true)
-        [[ $code == 200 || $code == 403 ]] && return
+        # 403/401 are expected: local requests carry neither a Tailscale
+        # identity (VNC) nor the Selkies password.
+        code=$(curl -so /dev/null -w '%{http_code}' \
+            "http://127.0.0.1:$web_port/" 2>/dev/null || true)
+        [[ $code == 200 || $code == 401 || $code == 403 ]] && return
         sleep 0.2
     done
     die "the desktop did not start; see: journalctl --user -u $unit"
@@ -172,12 +246,18 @@ show_url() {
     url=$(tailscale_url)
     qrencode -t ANSIUTF8 "$url" 2>/dev/null || true
     say "Open on your iPad (Tailscale app connected): $url"
+    [[ $backend == selkies ]] &&
+        echo "    Log in as ipad; 'ipad-desktop password' makes a new password."
     echo "    Then use Safari's Share > Add to Home Screen for a fullscreen app."
 }
 
 cmd_up() {
     ensure_dependencies
-    ensure_novnc
+    if [[ $backend == selkies ]]; then
+        ensure_selkies
+    else
+        ensure_novnc
+    fi
     [[ -f $password_file ]] || new_password
     ensure_tailscale
     write_config
@@ -188,8 +268,9 @@ cmd_up() {
 }
 
 cmd_run() {
-    # shellcheck disable=SC1090
-    [[ -f $config_file ]] && { set -a; . "$config_file"; set +a; }
+    if [[ $backend == selkies ]]; then
+        exec "$project_dir/bin/start-selkies"
+    fi
     exec "$project_dir/bin/start-desktop"
 }
 
@@ -203,6 +284,7 @@ cmd_doctor() {
     mapfile -t missing < <(missing_commands)
     manager=$(package_manager || echo unknown)
     echo "package manager: $manager"
+    echo "backend: $backend"
     if ((${#missing[@]})); then
         ok=false
         echo "missing commands: ${missing[*]}"
@@ -212,8 +294,13 @@ cmd_doctor() {
     fi
     session=$(detect_session) && echo "desktop: $session" ||
         { ok=false; echo "desktop: none of ${SESSIONS[*]}"; }
-    novnc=$(find_novnc) && echo "noVNC: $novnc" ||
-        { ok=false; echo "noVNC: not downloaded yet"; }
+    if [[ $backend == selkies ]]; then
+        selkies_ready && echo "Selkies: $SELKIES_VERSION in $selkies_venv" ||
+            { ok=false; echo "Selkies: not installed yet"; }
+    else
+        novnc=$(find_novnc) && echo "noVNC: $novnc" ||
+            { ok=false; echo "noVNC: not downloaded yet"; }
+    fi
     if command -v tailscale >/dev/null; then
         echo "tailscale: $(tailscale_json 'print(s.get("BackendState"))' || echo stopped)"
     else
