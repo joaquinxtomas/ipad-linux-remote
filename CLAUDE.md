@@ -193,8 +193,8 @@ CI runs `shellcheck -x` on the shell scripts (`.shellcheckrc` allows the
 
 ## Current focus
 
-Phase 6.7 (Selkies video backend) is implemented and passes
-`test/smoke-selkies.sh`; it still needs validation on the iPad through the
-service (geometry, UI scale, keyboard/clipboard, Safari basic auth in the
-home-screen app). Phase 6.5 only lacks a final `ipad-desktop up` run. Phase 4
-(programming UX) and Phase 7 (final validation) are not started.
+Phase 6.7 (Selkies video backend) is validated on the iPad and is the
+default. Open items: a final `ipad-desktop up` run for Phase 6.5, longer
+passwords once testing ends, and Phase 4 (programming UX: keyboard shortcuts,
+clipboard, home-screen app) and Phase 7 (final validation from another
+network).

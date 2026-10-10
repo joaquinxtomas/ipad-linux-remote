@@ -287,7 +287,9 @@ Avoid requiring manual terminal commands for normal usage.
 
 ## Phase 6.7 — Video streaming backend (Selkies)
 
-**Status:** active.
+**Status:** validated on the physical iPad (2026-10-09): fluid VS Code
+scrolling, native-size UI at scale 2, no letterbox after
+`viewport-fit=cover`, login through the QR code with a session token.
 
 ### Decision — 2026-10-09
 
